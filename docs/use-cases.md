@@ -50,7 +50,7 @@ nothing to reinstall. Not a TTY → prints one frame.
 
 ## `cc-spend calendar`
 
-Pro/Max/unknown plan: a plain notice, no border (plan name, what the statusline shows
+Pro/Max/unknown plan: a plain notice, no border or title (plan name, what the statusline shows
 instead), exit 0, the UI never loads. Team/Enterprise: the terminal calendar.
 Non-TTY: one frame on stdout, then exit.
 

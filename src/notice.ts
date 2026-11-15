@@ -16,11 +16,6 @@ function paint(style: NoticeStyle, code: string, text: string): string {
   return style.color ? `\x1b[${code}m${text}\x1b[0m` : text;
 }
 
-/** Bold title, blank line, then `lines`. No border. */
-function titled(style: NoticeStyle, title: string, lines: ReadonlyArray<string>): string {
-  return [paint(style, "1", title), "", ...lines].join("\n");
-}
-
 const PLAN_NAMES: Readonly<Record<string, string>> = {
   claude_pro: "Claude Pro",
   claude_max: "Claude Max",
@@ -65,5 +60,5 @@ export function calendarUnavailableNotice(
           "",
           `Install the statusline: ${accent("cc-spend statusline")}`,
         ];
-  return titled(style, "cc-spend calendar", lines);
+  return lines.join("\n");
 }

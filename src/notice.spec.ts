@@ -25,10 +25,10 @@ describe("notice.ts", () => {
     expect(unknown).toContain("Plan not detected yet");
   });
 
-  it("no border; bold title only with color", () => {
+  it("no border, no title: the plan line comes first", () => {
     const plain = calendarUnavailableNotice({ color: false }, "claude_pro", "subscription");
-    expect(plain.split("\n").slice(0, 2)).toEqual(["cc-spend calendar", ""]);
-    expect(plain).not.toMatch(/[╭╮╰╯│]/);
-    expect(calendarUnavailableNotice({ color: true }, "claude_pro", "subscription")).toContain("\x1b[1m");
+    expect(plain.split("\n")[0]).toBe("👤 Your plan: Claude Pro");
+    expect(plain).not.toMatch(/[╭╮╰╯│]|cc-spend calendar/);
+    expect(calendarUnavailableNotice({ color: true }, "claude_pro", "subscription")).toContain("\x1b[");
   });
 });

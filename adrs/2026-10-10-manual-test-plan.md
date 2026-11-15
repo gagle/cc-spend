@@ -87,7 +87,7 @@ payload() { printf '%s' "$1" | HOME=$SANDBOX node /path/to/cc-spend/bin/cc-spend
 | C6  | tester       | `NO_COLOR=1 ccs calendar`                            | no ANSI colours                                                                                   | manual                                        |
 | C7  | tester       | Ctrl+C, q, Esc                                       | exits, terminal restored (cursor visible, main screen)                                            | manual                                        |
 | C8  | tester       | keep it open while a Claude session spends           | numbers update within ~2 s                                                                        | manual                                        |
-| C9  | Pro user     | `ccs calendar`                                       | plain notice (no border) with plan name, ⏱/🎫/🧊 explanation; Ink-free, instant                               | `src/cli.spec.ts`, `e2e/cli.spec.ts`          |
+| C9  | Pro user     | `ccs calendar`                                       | plain notice (no border, no title) with plan name, ⏱/🎫/🧊 explanation; Ink-free, instant                               | `src/cli.spec.ts`, `e2e/cli.spec.ts`          |
 | C10 | unknown plan | `something_new` before any render                    | "Plan not detected yet" notice                                                                    | `src/cli.spec.ts`                             |
 | C11 | tester       | narrow terminal (e.g. 60 columns) with Claude Code   | default layout: the line ends in `…`; after splitting it with `ccs settings`, every line complete | manual                                        |
 
