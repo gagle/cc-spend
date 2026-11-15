@@ -12,42 +12,13 @@ export function noticeStyle(
   return { color: stream.isTTY === true && env.NO_COLOR === undefined && env.TERM !== "dumb" };
 }
 
-/** Visible width of a line: ANSI codes stripped, emoji/wide symbols counted as 2 columns. */
-export function visibleWidth(text: string): number {
-  // eslint-disable-next-line no-control-regex
-  const plain = text.replace(/\x1b\[[0-9;]*m/g, "");
-  let width = 0;
-  for (const char of plain) {
-    // A for…of character always has a code point; the fallback only satisfies the type.
-    /* v8 ignore next */
-    const code = char.codePointAt(0) ?? 0;
-    if (code === 0x200d) continue; // zero-width joiner
-    if (code === 0xfe0f) {
-      width += 1; // emoji presentation selector: the preceding symbol renders 2 columns wide
-      continue;
-    }
-    width += code >= 0x1f000 || (code >= 0x2600 && code <= 0x27bf) ? 2 : 1;
-  }
-  return width;
-}
-
 function paint(style: NoticeStyle, code: string, text: string): string {
   return style.color ? `\x1b[${code}m${text}\x1b[0m` : text;
 }
 
-/** A rounded box around `lines`, title in the top border. */
-export function box(style: NoticeStyle, title: string, lines: ReadonlyArray<string>): string {
-  const inner = Math.max(visibleWidth(title) + 2, ...lines.map(visibleWidth)) + 2;
-  const border = (text: string): string => paint(style, "38;2;100;180;255", text);
-  const top =
-    border("╭─ ") +
-    paint(style, "1", title) +
-    border(` ${"─".repeat(inner - visibleWidth(title) - 3)}╮`);
-  const body = lines.map(
-    (line) => `${border("│")} ${line}${" ".repeat(inner - 1 - visibleWidth(line))}${border("│")}`,
-  );
-  const bottom = border(`╰${"─".repeat(inner)}╯`);
-  return [top, ...body, bottom].join("\n");
+/** Bold title, blank line, then `lines`. No border. */
+function titled(style: NoticeStyle, title: string, lines: ReadonlyArray<string>): string {
+  return [paint(style, "1", title), "", ...lines].join("\n");
 }
 
 const PLAN_NAMES: Readonly<Record<string, string>> = {
@@ -62,9 +33,7 @@ export function planName(planType: string | null | undefined): string {
   return PLAN_NAMES[planType] ?? planType;
 }
 
-/** Why `calendar` does not open on this account. `unknown`: the plan was never detected yet.
- * Glyphs are wide emoji (U+1F000+) only: a symbol + U+FE0F such as `ℹ️` is 1 column in some terminals and 2
- * in others, so no width count can keep the right border straight. */
+/** Why `calendar` does not open on this account. `unknown`: the plan was never detected yet. */
 export function calendarUnavailableNotice(
   style: NoticeStyle,
   planType: string | null | undefined,
@@ -96,5 +65,5 @@ export function calendarUnavailableNotice(
           "",
           `Install the statusline: ${accent("cc-spend statusline")}`,
         ];
-  return box(style, "cc-spend calendar", lines);
+  return titled(style, "cc-spend calendar", lines);
 }

@@ -67,7 +67,7 @@ cache-forecast.ts      prompt-cache next-prompt cost prediction
 pricing.ts             per-model $/MTok table and cache multipliers
 git.ts                 branch from .git/HEAD
 calendar-tui.ts        dependency-free terminal calendar (pure render + reducer + IO loop)
-notice.ts              boxed terminal notices (calendar on Pro/Max)
+notice.ts              plain terminal notices (calendar on Pro/Max)
 statusline-install.ts  install / upgrade / uninstall of the shim
 statusline-shared.ts   installer helpers, settings.json merges (statusLine, hooks, subagentStatusLine), atomic settings write
 statusline-capture-install.ts  capture-only fallback for a foreign statusline
