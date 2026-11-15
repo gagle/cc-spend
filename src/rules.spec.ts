@@ -87,7 +87,7 @@ afterEach(() => {
 describe("RULE_INFO", () => {
   it("one entry per rule id, every text filled, and each finding's title comes from it", () => {
     expect(RULE_INFO.map((rule) => rule.id)).toEqual(
-      Array.from({ length: 12 }, (_, i) => `R${String(i + 1)}`),
+      Array.from({ length: 13 }, (_, i) => `R${String(i + 1)}`),
     );
     for (const rule of RULE_INFO) {
       for (const text of [rule.title, rule.checks, rule.why, rule.estimate, rule.fix]) {
@@ -191,17 +191,59 @@ describe("coach rules", () => {
     expect(only(findings, "R4")).toMatchObject({
       usd: 5.3,
       evidence: "misses: tools changed $4.00, ttl expired 5m $1.00, b $0.20",
-      fix: { kind: "habit" },
+      fix: {
+        kind: "habit",
+        text: "/compact before a break; keep the MCP server and tool set stable mid-session",
+      },
+    });
+  });
+
+  it("R4: misses after a tool wait, by tool; the larger source, never the sum", () => {
+    const waits = (toolWaitUsd?: Record<string, number>): SessionTotals => ({
+      ...session(1),
+      ...(toolWaitUsd ? { toolWaitUsd } : {}),
+    });
+    const sessions = { a: waits({ Bash: 2, Task: 1 }), b: waits({ Bash: 1 }), c: waits() };
+    expect(only(coach(input({ sessions })), "R4")).toMatchObject({
+      usd: 4,
+      evidence: "after a tool ran 5+ min: Bash $3.00, Task $1.00",
+      fix: { text: expect.stringContaining("background") as string },
+    });
+    const both = coach(
+      input({ sessions, missCauses: { "2026-10-07": { ttl_expired_5m: { count: 1, usd: 9 } } } }),
+    );
+    expect(only(both, "R4")).toMatchObject({
+      usd: 9,
+      evidence: "misses: ttl expired 5m $9.00; after a tool ran 5+ min: Bash $3.00, Task $1.00",
+      fix: { text: expect.stringContaining("/compact before a break") as string },
     });
   });
 
   it("R5: context past 200k", () => {
     const findings = coach(input({ rows: [row({ cacheRead: 10_000_000 })] }));
     expect(only(findings, "R5")).toMatchObject({
-      evidence: "re-reading context above 200k tokens (deepest 10000k)",
+      evidence: "context above 200k tokens (deepest 10000k): $1.96 re-read",
       fix: { kind: "setting", key: "autoCompactWindow", value: "200000" },
     });
     expect(only(findings, "R5")?.usd).toBeCloseTo(2 * 0.98);
+    // A miss above 200k re-writes the deep part too: R5 counts it, R11 does not count it again.
+    const [key, rollup] = row({ cacheRead: 10_000_000 });
+    const missed = coach(
+      input({
+        rows: [
+          [
+            key,
+            { ...rollup, deepRewriteUsd: 1, usdRewrite: 1.5, rewriteTokens: 900, freshSplit: 1000 },
+          ],
+        ],
+      }),
+    );
+    expect(only(missed, "R5")).toMatchObject({
+      usd: expect.closeTo(2.96, 5) as number,
+      evidence:
+        "context above 200k tokens (deepest 10000k): $1.96 re-read, $1.00 re-written after misses",
+    });
+    expect(only(missed, "R11")?.usd).toBe(0.5);
   });
 
   it("R6: outlier sessions need 8 sessions and pass max($2, 3 × median)", () => {
@@ -303,6 +345,56 @@ describe("coach rules", () => {
     expect(limitsOnly[0]?.evidence).toBe("7d limit runs out soon");
   });
 
+  it("R8 from requests that hit the usage limit, even with no forecast at risk", () => {
+    const hit = (apiErrors: Record<string, number>): SessionTotals => ({
+      ...session(1),
+      apiErrors,
+    });
+    const findings = coach(
+      input({
+        window: "month",
+        sessions: {
+          a: hit({ "429 usage_limit_reached": 2, "529": 4 }),
+          b: hit({ "429 usage_limit_reached": 1 }),
+          c: session(1),
+        },
+      }),
+    );
+    expect(findings[0]).toMatchObject({ id: "R8", evidence: "hit the usage limit 3× this month" });
+    expect(only(coach(input({ sessions: { a: hit({ "529": 4 }) } })), "R8")).toBeUndefined();
+  });
+
+  it("weekPct: a $ finding as points of the 7d limit per week, once $ per 1% is measured", () => {
+    const limits = (usdPerPercentWeek: number | null): CoachInput["limits"] => ({
+      fiveHour: null,
+      sevenDay: null,
+      usdPerPercentWeek,
+      claudeCodeShare: null,
+    });
+    const rows = [row({ input: 1_000_000, fast: true })]; // R2 $4
+    expect(only(coach(input({ rows, limits: limits(0.5) })), "R2")?.weekPct).toBe(8);
+    expect(
+      only(coach(input({ rows, window: "month", limits: limits(0.5) })), "R2")?.weekPct,
+    ).toBeCloseTo((4 * 7) / 30 / 0.5, 9);
+    expect(only(coach(input({ rows, limits: limits(null) })), "R2")).not.toHaveProperty("weekPct");
+    expect(only(coach(input({ rows, limits: limits(0) })), "R2")).not.toHaveProperty("weekPct");
+    const at = coach(
+      input({
+        limits: {
+          ...(limits(0.5) as NonNullable<CoachInput["limits"]>),
+          sevenDay: {
+            usedPct: 90,
+            resetsAt: null,
+            ratePctPerHour: 1,
+            exhaustsAt: null,
+            verdict: "at-risk",
+          },
+        },
+      }),
+    );
+    expect(at[0]).not.toHaveProperty("weekPct"); // R8 has no $
+  });
+
   it("R9: an older model with a cheaper or equal replacement", () => {
     const findings = coach(
       input({
@@ -378,6 +470,49 @@ describe("coach rules", () => {
     );
     expect(only(coach(input({ rows: [churned(100, 1000)] })), "R11")).toBeUndefined();
     expect(only(coach(input({ rows: [churned(0, 1000)] })), "R11")).toBeUndefined();
+  });
+
+  it("R13: a 1h cache, per project, only where its saving beats its 2x writes", () => {
+    const projectRow = (
+      project: string,
+      ttlSaveUsd: number,
+      oneHourExtraUsd: number,
+    ): readonly [string, Rollup] => [
+      rowKey({
+        day: "2026-10-07",
+        project,
+        model: "claude-opus-5-5",
+        scope: "main",
+        speed: "standard",
+      }),
+      { ...emptyRollup(), ttlSaveUsd, oneHourExtraUsd },
+    ];
+    const findings = coach(
+      input({
+        rows: [
+          projectRow("/w/a", 3, 1),
+          projectRow("/w/a", 1, 0.5),
+          projectRow("C:\\w\\b", 1, 0),
+          projectRow("", 0.9, 0.1),
+          projectRow("/w/c", 1, 4),
+        ],
+      }),
+    );
+    expect(only(findings, "R13")).toMatchObject({
+      usd: expect.closeTo(4.3, 9) as number,
+      evidence: "1h cache would net: a $2.50, b $1.00, (unknown) $0.80 (not in 1 other project(s))",
+      fix: {
+        kind: "setting",
+        key: "promptCacheTtl",
+        value: "1h",
+        text: "Set a 1h prompt cache in those projects' .claude/settings.json",
+      },
+    });
+    expect(only(coach(input({ rows: [projectRow("/w/a", 3, 1)] })), "R13")).toMatchObject({
+      evidence: "1h cache would net: a $2.00",
+      fix: { text: "Set a 1h prompt cache" },
+    });
+    expect(only(coach(input({ rows: [projectRow("/w/c", 1, 4)] })), "R13")).toBeUndefined();
   });
 
   it("R12: instruction files past the lean size, re-read on every main turn", () => {

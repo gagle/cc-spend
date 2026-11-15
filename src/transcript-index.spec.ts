@@ -482,6 +482,38 @@ describe("runIndexPass", () => {
     });
   });
 
+  it("a miss after a 5+ min tool run is charged to the tool whose result it waited for", async () => {
+    sessionsMap("acct", ["s1"]);
+    const turn = (id: string, hhmm: string, write: number, tool?: string): string =>
+      line(id, {
+        timestamp: `2026-10-07T${hhmm}:00.000Z`,
+        message: {
+          id: `m-${id}`,
+          model: "claude-opus-5-5",
+          usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: write },
+          content: tool ? [{ type: "tool_use", id: `tu-${id}`, name: tool }] : [],
+        },
+      });
+    const result = `${JSON.stringify({
+      type: "user",
+      sessionId: "s1",
+      message: { content: [{ type: "tool_result", tool_use_id: "tu-a" }] },
+    })}\n`;
+    const main = path.join(projectDir(), "s1.jsonl");
+    writeFileSync(main, turn("a", "10:00", 50_000, "Bash") + result);
+    const { runIndexPass, loadSessionTotals, loadRollups } = await fresh();
+    runIndexPass({ now: NOW });
+    // Next pass resumes from the saved time of the last turn: 10 min later, everything written again.
+    appendFileSync(main, turn("b", "10:10", 60_000, "Read"));
+    runIndexPass({ now: NOW });
+    const waits = loadSessionTotals("acct").s1?.toolWaitUsd ?? {};
+    expect(Object.keys(waits)).toEqual(["Bash"]);
+    const [rollup] = loadRollups("acct", ["2026-10"]).values();
+    expect(waits.Bash).toBeCloseTo(rollup?.toolWaitRewriteUsd ?? 0, 9);
+    expect(waits.Bash).toBeGreaterThan(0);
+    expect(rollup?.ttlSaveUsd).toBeGreaterThan(0);
+  });
+
   it("rows indexed before a rollup field existed read it as 0", async () => {
     const { loadRollups, ownerIndexDir } = await fresh();
     mkdirSync(ownerIndexDir("acct"), { recursive: true });

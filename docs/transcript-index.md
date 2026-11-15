@@ -71,6 +71,16 @@ owner = account whose sessions-map.json has the session id, else "unattributed";
   resumed from an offset with no saved `context` skips the split for one turn;
   rows indexed before 2026-10-18 read these as 0 (`loadRollups` fills missing
   fields).
+- Cache what-ifs (`addTurn`, from the split's rewrite $; `PRICES_VERSION` `.4`
+  re-indexed them): `deepRewriteUsd` is a rewrite's share above 200k
+  (`DEEP_CONTEXT_TOKENS`); `oneHourExtraUsd` is every 5m write at the 1h − 5m
+  rate. A turn's gap is the time since the thread's previous turn (`offsets.json`
+  `at` carries it across passes). A gap of 5-60 min adds the rewrite × (1 −
+  read ÷ 5m-write rate) to `ttlSaveUsd`. A gap of 5 min or more after a
+  `tool_result` user line adds the rewrite to `toolWaitRewriteUsd` and to the
+  session's `toolWaitUsd` under the last tool called before it (`tool_use`
+  name; `offsets.json` `tool` and `afterTool` carry them across passes). The
+  rules use these in R4, R5, R11 and R13 (`docs/coach.md`).
 - MCP (`parseMcpLoad`, `mcpServersUsed`): an `mcp_instructions_delta`
   attachment gives the servers whose instructions entered context and their
   size (4 characters per token) → `mcpLoaded`; every copy of an assistant line

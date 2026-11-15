@@ -97,6 +97,12 @@ export function adviceFor(
 
 const money = (usd: number): string => `~$${usd.toFixed(2)}`;
 
+/** ` (≈3% of 7d/week)`: Pro/Max only, and only once there is a measured $ per 1%. */
+const weekShare = (finding: Finding): string =>
+  finding.weekPct === undefined
+    ? ""
+    : ` (≈${finding.weekPct < 1 ? "<1" : String(Math.round(finding.weekPct))}% of 7d/week)`;
+
 export function formatInsights(advice: ReadonlyArray<Finding>, window: CoachWindow): string {
   if (advice.length === 0) return `Nothing to change this ${window}.`;
   const lines = advice.map((finding) => {
@@ -108,7 +114,7 @@ export function formatInsights(advice: ReadonlyArray<Finding>, window: CoachWind
       ? ` (snoozed until ${finding.snoozedUntil.slice(0, 10)})`
       : "";
     return [
-      `${finding.id}  ${finding.title}${finding.usd === null ? "" : `  ${money(finding.usd)}/${window}`}${snoozed}`,
+      `${finding.id}  ${finding.title}${finding.usd === null ? "" : `  ${money(finding.usd)}/${window}`}${weekShare(finding)}${snoozed}`,
       `    ${finding.evidence}`,
       ...(finding.why === undefined ? [] : [`    why: ${finding.why}`]),
       `    fix: ${finding.fix.text}${fix === finding.fix.text ? "" : ` → ${fix}`}`,

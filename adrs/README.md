@@ -33,3 +33,4 @@ one's status to `Superseded by …`). That is why `scripts/doc-drift.mjs` exempt
 | [2026-11-12-scoped-npm-name.md](./2026-11-12-scoped-npm-name.md)                                                 | npm name `@gllamas/cc-spend`; command and config dir stay `cc-spend`                                     |
 | [2026-11-15-honest-user-agent.md](./2026-11-15-honest-user-agent.md)                                             | `cc-spend/<version>` user agent on every request; limit-reset grants removed                             |
 | [2026-11-12-record.md](./2026-11-12-record.md)                                                                   | `record`: automatic back-to-back periods vs a baseline, habit scores, focus, prompt counts               |
+| [2026-11-15-cache-what-ifs.md](./2026-11-15-cache-what-ifs.md)                                                   | rewrite above 200k in R5, tool waits in R4, R13 1h cache only where it pays, % of 7d per finding         |

@@ -95,6 +95,16 @@ describe("formatInsights", () => {
       formatInsights([{ ...FINDING, fix: { kind: "env", key: "K", text: "t" } }], "week"),
     ).toContain("→ K=");
   });
+
+  it("Pro/Max: the $ as points of the 7d limit, `<1` under one point", async () => {
+    const { formatInsights } = await fresh();
+    expect(formatInsights([{ ...FINDING, weekPct: 2.6 }], "week")).toContain(
+      "R2  Fast mode  ~$4.00/week (≈3% of 7d/week)\n",
+    );
+    expect(formatInsights([{ ...FINDING, weekPct: 0.4 }], "week")).toContain(
+      "~$4.00/week (≈<1% of 7d/week)\n",
+    );
+  });
 });
 
 describe("formatRules / rulesWithFound", () => {

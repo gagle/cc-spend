@@ -178,26 +178,31 @@ function tablePrice(model: string, usage: CcModelUsage): number | null {
  * Self-check: Claude Code's own $ per model and run (`cost-state`) against the same tokens at this table's
  * prices. Both price the same tokens, so a gap over 1% (on more than 5 cents) means the table is stale for that
  * model, or the run used fast mode. Haiku 5.5 is skipped: its price depends on each request's prompt size.
+ * Only each model's newest run counts: an older Claude Code may have priced a model differently (2.1.293
+ * billed Sonnet 5.5 cache reads at $0.20, later builds at $0.10), and that past gap says nothing about the
+ * table now.
  */
 export function selfCheck(
   totals: Readonly<Record<string, SessionTotals>>,
   range: DayRange,
 ): ReadonlyArray<string> {
-  const worst = new Map<string, number>();
+  const newest = new Map<string, { start: number; gap: number }>();
   for (const session of Object.values(totals)) {
     if (!lastInRange(session, range)) continue;
-    for (const run of Object.values(session.ccRuns ?? {})) {
+    for (const [startKey, run] of Object.entries(session.ccRuns ?? {})) {
+      const start = Number(startKey);
       for (const [model, usage] of Object.entries(run.models)) {
         const table = tablePrice(model, usage);
         if (table === null || usage.usd <= 0.05) continue;
-        const gap = (table - usage.usd) / usage.usd;
-        if (Math.abs(gap) > 0.01 && Math.abs(gap) > Math.abs(worst.get(model) ?? 0)) {
-          worst.set(model, gap);
-        }
+        if (start <= (newest.get(model)?.start ?? Number.NEGATIVE_INFINITY)) continue;
+        newest.set(model, { start, gap: (table - usage.usd) / usage.usd });
       }
     }
   }
-  return [...worst]
+  return [...newest]
+    .flatMap(([model, { gap }]): Array<[string, number]> =>
+      Math.abs(gap) > 0.01 ? [[model, gap]] : [],
+    )
     .sort(([a], [b]) => a.localeCompare(b))
     .map(
       ([model, gap]) =>

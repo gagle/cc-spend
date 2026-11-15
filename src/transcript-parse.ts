@@ -1,6 +1,7 @@
 import { localDateKey } from "./clock.js";
 import {
   cacheWriteRate,
+  type ModelRates,
   normalizeModelId,
   ratesFor,
   tokensCost,
@@ -424,6 +425,23 @@ export interface Rollup {
   usdNewWork: number;
   usdCarry: number;
   usdRewrite: number;
+  // Where the rewrite $ came from (0 in rows indexed before 2026-11-15). The parts overlap: one rewrite above
+  // 200k after a tool wait of 10 min counts in all three.
+  deepRewriteUsd: number; // the part of usdRewrite above DEEP_CONTEXT_TOKENS (compacting there avoids it)
+  toolWaitRewriteUsd: number; // usdRewrite on requests sent after a tool result, CACHE_TTL_S or more after the last
+  ttlSaveUsd: number; // what a 1h TTL would have saved: rewrites 5-60 min after the last request, as reads instead
+  oneHourExtraUsd: number; // what a 1h TTL would have added: every 5m write at the 1h rate
+}
+
+/** The default prompt-cache lifetime: a request this long after the previous one finds the cache cold. */
+export const CACHE_TTL_S = 300;
+/** The 1h lifetime. */
+const CACHE_TTL_1H_S = 3600;
+
+/** How a request followed the previous one in its thread: the wait, and whether a tool result came between. */
+export interface TurnGap {
+  readonly seconds: number;
+  readonly afterTool: boolean;
 }
 
 /** Effort levels whose thinking the coach (rule R3) counts as optional. */
@@ -457,6 +475,10 @@ export function emptyRollup(): Rollup {
     usdNewWork: 0,
     usdCarry: 0,
     usdRewrite: 0,
+    deepRewriteUsd: 0,
+    toolWaitRewriteUsd: 0,
+    ttlSaveUsd: 0,
+    oneHourExtraUsd: 0,
   };
 }
 
@@ -471,13 +493,15 @@ export function rollupUsd(rollup: Rollup): number {
 }
 
 /** Adds `turn` (priced as `cost`) into `rollup` in place. `previousContext` is the context of the thread's
- * previous turn (0 for its first); null when unknown, which skips the efficiency split. */
+ * previous turn (0 for its first); null when unknown, which skips the efficiency split. `gap` is how the turn
+ * followed the previous one (null: first turn, or unknown). Returns the rewrite $ after a tool wait. */
 export function addTurn(
   rollup: Rollup,
   turn: Turn,
   cost: TurnCost | null,
   previousContext: number | null = null,
-): void {
+  gap: TurnGap | null = null,
+): number {
   const context = contextTokens(turn);
   rollup.turns += 1;
   rollup.input += turn.input;
@@ -490,7 +514,7 @@ export function addTurn(
   rollup.maxContext = Math.max(rollup.maxContext, context);
   if (cost === null) {
     rollup.unpricedTurns += 1;
-    return;
+    return 0;
   }
   rollup.usdInput += cost.input;
   rollup.usdOutput += cost.output;
@@ -513,6 +537,35 @@ export function addTurn(
     rollup.usdCarry += split.carryUsd;
     rollup.usdRewrite += split.rewriteUsd;
   }
+  return addCacheWhatIfs(rollup, turn, cost, previousContext, gap);
+}
+
+/** The rewrite-source and 1h-TTL fields of addTurn; returns the rewrite $ after a tool wait. */
+function addCacheWhatIfs(
+  rollup: Rollup,
+  turn: Turn,
+  cost: TurnCost,
+  previousContext: number | null,
+  gap: TurnGap | null,
+): number {
+  // ponytail: rates of the turn's last request; a multi-request Haiku 5.5 turn across its tier is off a little.
+  const context = contextTokens(turn);
+  // Priced (addTurn returned early on no cost), so the rates exist.
+  const rates = ratesFor(turn.model, turn.fast, context, turn.usOnly) as ModelRates;
+  const write5m = cacheWriteRate(rates, "5m");
+  rollup.oneHourExtraUsd += tokensCost(turn.cacheWrite5m, cacheWriteRate(rates, "1h") - write5m);
+  if (previousContext === null) return 0;
+  const rewriteUsd = splitTurn(turn, cost, previousContext).rewriteUsd;
+  if (context > DEEP_CONTEXT_TOKENS) {
+    rollup.deepRewriteUsd += rewriteUsd * ((context - DEEP_CONTEXT_TOKENS) / context);
+  }
+  if (gap === null || gap.seconds < CACHE_TTL_S) return 0;
+  // Read at the cache-read rate instead of written at the 5m rate.
+  if (gap.seconds < CACHE_TTL_1H_S)
+    rollup.ttlSaveUsd += rewriteUsd * (1 - rates.cacheRead / write5m);
+  if (!gap.afterTool) return 0;
+  rollup.toolWaitRewriteUsd += rewriteUsd;
+  return rewriteUsd;
 }
 
 /** Claude Code's tool-name prefix for an MCP server: `plugin:figma:figma` → `plugin_figma_figma`. */

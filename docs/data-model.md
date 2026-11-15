@@ -101,9 +101,10 @@ It keeps 35 days of switches plus the newest older one.
 - A history file that is missing, garbled or of a newer version reads as empty.
 - Transcript index files (`docs/transcript-index.md`) add fields without a
   version bump: rollups `growth`, `freshSplit`, `rewriteTokens`, `usdNewWork`,
-  `usdCarry`, `usdRewrite` (missing → 0 on load); `offsets.json` per file
-  `context`; `sessions.json` per session `mcpLoaded`, `mcpUsed`,
-  `attributedUsd`, `apiErrors`, `ccRuns` (`{ <startTime>: { usd, models } }`,
+  `usdCarry`, `usdRewrite`, `deepRewriteUsd`, `toolWaitRewriteUsd`,
+  `ttlSaveUsd`, `oneHourExtraUsd` (missing → 0 on load); `offsets.json` per file
+  `context`, `at`, `tool`, `afterTool`; `sessions.json` per session `mcpLoaded`, `mcpUsed`,
+  `attributedUsd`, `apiErrors`, `toolWaitUsd`, `ccRuns` (`{ <startTime>: { usd, models } }`,
   Claude Code's own cost per run) (missing → none). `index/prices.json` holds the
   `PRICES_VERSION` the index was priced at; `index/backup-prices-<version>/`
   is the copy taken before a re-price; a finished re-price removes every older one.

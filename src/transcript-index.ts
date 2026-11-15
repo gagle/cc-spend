@@ -51,6 +51,9 @@ import {
 
 /** Format version of every index file. */
 export const INDEX_SCHEMA_VERSION = 1;
+
+/** The tool an assistant line calls (Claude Code writes `type`, `id`, `name` in this order). */
+const TOOL_USE_NAME = /"type":"tool_use","id":"[^"]*","name":"([^"]+)"/;
 /** Owner of sessions no account's sessions-map.json knows (no statusline ran for them). */
 export const UNATTRIBUTED = "unattributed";
 /** One pass stops starting new files after this many bytes or this long; the rest waits for the next. */
@@ -79,6 +82,9 @@ interface FileOffset {
   mtimeMs: number;
   recent: Array<string>;
   context?: number; // context tokens of the file's last turn (the efficiency split needs the previous one)
+  at?: string; // ISO time of the file's last turn (the next turn's gap)
+  tool?: string; // the last tool called, so a wait that spans two passes still knows it
+  afterTool?: true; // a tool result came after the last turn
 }
 
 /** Per-session totals (sessions.json). */
@@ -100,6 +106,7 @@ export interface SessionTotals {
   mcpUsed?: Array<string>; // MCP servers the session called
   attributedUsd?: Record<string, number>; // `skill:<name>` / `mcp:<server>` → $ Claude Code attributed to it
   apiErrors?: Record<string, number>; // `429 usage_limit_reached`, … → failed requests
+  toolWaitUsd?: Record<string, number>; // tool name → $ re-written because its result came after the cache TTL
   // Claude Code's own cost per process run (`cost-state`), keyed by the run's start (epoch ms as a string).
   ccRuns?: Record<string, ClaudeCodeRun>;
 }
@@ -276,6 +283,7 @@ interface SessionDelta {
   mcpUsed: Set<string>;
   attributedUsd: Map<string, number>;
   apiErrors: Map<string, number>;
+  toolWaitUsd: Map<string, number>;
   ccRuns: Map<string, ClaudeCodeRun>;
 }
 
@@ -291,6 +299,7 @@ function emptySessionDelta(): SessionDelta {
     mcpUsed: new Set(),
     attributedUsd: new Map(),
     apiErrors: new Map(),
+    toolWaitUsd: new Map(),
     ccRuns: new Map(),
   };
 }
@@ -361,6 +370,9 @@ function applyDelta(owner: string, delta: OwnerDelta): void {
       ...mcpTotals(prior, add),
       attributedUsd: addCounts(prior?.attributedUsd, add.attributedUsd),
       apiErrors: addCounts(prior?.apiErrors, add.apiErrors),
+      ...(prior?.toolWaitUsd || add.toolWaitUsd.size > 0
+        ? { toolWaitUsd: addCounts(prior?.toolWaitUsd, add.toolWaitUsd) }
+        : {}),
       ...(prior?.ccRuns || add.ccRuns.size > 0
         ? { ccRuns: mergeRuns(prior?.ccRuns, add.ccRuns) }
         : {}),
@@ -594,6 +606,12 @@ export function runIndexPass(
       const recent = from === 0 || !prior ? [] : [...prior.recent];
       // The previous turn's context in this thread; unknown when resuming a file indexed before it was kept.
       let context: number | null = from === 0 ? 0 : (prior?.context ?? null);
+      // The previous turn's time; whether a tool result came after it, and the last tool called.
+      const resumed = from === 0 ? undefined : prior;
+      let lastAt: string | null = resumed?.at ?? null;
+      let afterTool = resumed?.afterTool === true;
+      let lastTool = resumed?.tool ?? "unknown";
+      let lineTool: string | undefined;
       const scope = scopeOf(file);
       // Claude Code repeats a line once per content block: true for a key seen in the last RECENT_KEYS.
       const repeated = (key: string): boolean => {
@@ -610,6 +628,10 @@ export function runIndexPass(
         return session;
       };
       for (const line of lines) {
+        if (line.includes('"type":"user"')) afterTool = line.includes('"tool_result"');
+        // A turn's own tool_use counts from the next line on: the tool whose result a later turn waited for.
+        if (lineTool !== undefined) lastTool = lineTool;
+        lineTool = TOOL_USE_NAME.exec(line)?.[1];
         const called = mcpServersUsed(line);
         if (called !== null) {
           const session = sessionDelta(called.sessionId);
@@ -669,8 +691,14 @@ export function runIndexPass(
         const row = rows.get(rowKey(key)) ?? emptyRollup();
         rows.set(rowKey(key), row);
         const cost = priceTurn(turn);
-        addTurn(row, turn, cost, context);
+        const gap =
+          lastAt === null
+            ? null
+            : { seconds: (Date.parse(turn.timestamp) - Date.parse(lastAt)) / 1000, afterTool };
+        const toolWait = addTurn(row, turn, cost, context, gap);
         context = contextTokens(turn);
+        lastAt = turn.timestamp;
+        afterTool = false;
         const usd =
           cost === null
             ? 0
@@ -684,6 +712,9 @@ export function runIndexPass(
         ]) {
           if (name) session.attributedUsd.set(name, (session.attributedUsd.get(name) ?? 0) + usd);
         }
+        if (toolWait > 0) {
+          session.toolWaitUsd.set(lastTool, (session.toolWaitUsd.get(lastTool) ?? 0) + toolWait);
+        }
         if (cost === null) session.unpriced += 1;
         if (scope !== "main") session.subagentUsd += usd;
         turns += 1;
@@ -694,6 +725,9 @@ export function runIndexPass(
         mtimeMs: stat.mtimeMs,
         recent,
         ...(context === null ? {} : { context }),
+        ...(lastAt === null ? {} : { at: lastAt }),
+        ...((lineTool ?? lastTool) === "unknown" ? {} : { tool: lineTool ?? lastTool }),
+        ...(afterTool ? { afterTool: true as const } : {}),
       };
     }
 

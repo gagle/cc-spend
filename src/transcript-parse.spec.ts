@@ -416,6 +416,59 @@ describe("addTurn efficiency split", () => {
   });
 });
 
+describe("addTurn cache what-ifs", () => {
+  const base = parseTurn(usageLine());
+  if (!base) throw new Error("turn");
+  // 240k already cached, cache missed: the whole 250k written again at the 5m rate.
+  const turn = {
+    ...base,
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite5m: 250_000,
+    cacheWrite1h: 0,
+  };
+  const cost = priceTurn(turn);
+  if (!cost) throw new Error("cost");
+  const rewriteUsd = splitTurn(turn, cost, 240_000).rewriteUsd;
+
+  it("prices the 1h writes' extra on every priced turn, and the deep part of a rewrite", () => {
+    const first = emptyRollup();
+    expect(addTurn(first, turn, cost)).toBe(0);
+    expect(first.oneHourExtraUsd).toBeCloseTo((250_000 * (8 - 5)) / 1e6, 9); // Opus 5.5: $4 input, 1h 2×, 5m 1.25×
+    expect(first.deepRewriteUsd).toBe(0); // no previous context, no rewrite known
+    const rollup = emptyRollup();
+    addTurn(rollup, turn, cost, 240_000);
+    expect(rewriteUsd).toBeGreaterThan(0);
+    expect(rollup.deepRewriteUsd).toBeCloseTo(rewriteUsd * (50 / 250), 9);
+    expect(rollup).toMatchObject({ ttlSaveUsd: 0, toolWaitRewriteUsd: 0 });
+  });
+
+  it("a 5-60 min gap: a 1h cache would have read it; after a tool result it is a tool wait", () => {
+    const afterTool = emptyRollup();
+    expect(addTurn(afterTool, turn, cost, 240_000, { seconds: 600, afterTool: true })).toBeCloseTo(
+      rewriteUsd,
+      9,
+    );
+    expect(afterTool.ttlSaveUsd).toBeCloseTo(rewriteUsd * (1 - 0.05 / 1.25), 9);
+    expect(afterTool.toolWaitRewriteUsd).toBeCloseTo(rewriteUsd, 9);
+    const afterPrompt = emptyRollup();
+    expect(addTurn(afterPrompt, turn, cost, 240_000, { seconds: 600, afterTool: false })).toBe(0);
+    expect(afterPrompt.ttlSaveUsd).toBeCloseTo(afterTool.ttlSaveUsd, 9);
+    const long = emptyRollup();
+    addTurn(long, turn, cost, 240_000, { seconds: 7200, afterTool: true });
+    expect(long.ttlSaveUsd).toBe(0); // past an hour a 1h cache expires too
+    expect(long.toolWaitRewriteUsd).toBeCloseTo(rewriteUsd, 9);
+    const warm = emptyRollup();
+    expect(addTurn(warm, turn, cost, 240_000, { seconds: 120, afterTool: true })).toBe(0);
+    expect(warm).toMatchObject({ ttlSaveUsd: 0, toolWaitRewriteUsd: 0 });
+    const unpriced = emptyRollup();
+    const future = { ...turn, model: "claude-future-9" };
+    expect(addTurn(unpriced, future, null, 240_000, { seconds: 600, afterTool: true })).toBe(0);
+    expect(unpriced).toMatchObject({ oneHourExtraUsd: 0, deepRewriteUsd: 0 });
+  });
+});
+
 describe("parseCompaction", () => {
   const boundary = (extra: Record<string, unknown> = {}): string =>
     JSON.stringify({
