@@ -70,15 +70,15 @@ README when `src/rules.ts` changes.
   action, the most urgent first, from what the render already has (one small
   `feed.json` read, no transcripts):
 
-  | When                                                                                                           | Shows                                                                                       |
-  | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-  | cache warm, ≤ 90 s left, letting it expire costs ≥ $0.05                                                       | `» send now or /compact · cache cold in 45s, then +$1.22` (orange)                          |
-  | cache cold, the next message re-writes ≥ $0.50                                                                 | `» new task? /clear · same task? /compact first` (orange)                                   |
-  | context within 20k of the auto-compact trigger (window − 33k: 167k on 200k, 967k on 1M; `context_window_size`) | `» /compact now, with a focus · auto-compact in 17k (at 167k)`                              |
-  | context ≥ 150k tokens (`total_input_tokens`)                                                                   | `» /compact at the next break · 520k re-read each turn, ~$0.10`                             |
-  | a 5h or 7d window `at-risk`                                                                                    | `» /model sonnet for routine steps · keep Opus for the hard ones`                           |
-  | a record closed and `cc-spend record` not run since                                                            | `» record #2 done: 4/5 habits better · cc-spend record` (`feed.json.record.notice`)         |
-  | else the first non-snoozed finding except R8                                                                   | `» <rule action> · ~$X/<window>` (`RULE_INFO.action`; the title in feeds written before it) |
+  | When                                                                                                           | Shows                                                                                                                                                     |
+  | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | cache warm, ≤ 90 s left, letting it expire costs ≥ $0.05                                                       | `» send now or /compact before the cache goes cold` (orange); with no cache part in the layout, `» send now or /compact · cache cold in 45s, then +$1.22` |
+  | cache cold, the next message re-writes ≥ $0.50                                                                 | `» new task? /clear · same task? /compact first` (orange)                                                                                                 |
+  | context within 20k of the auto-compact trigger (window − 33k: 167k on 200k, 967k on 1M; `context_window_size`) | `» /compact now, with a focus · auto-compact in 17k (at 167k)`                                                                                            |
+  | context ≥ 150k tokens (`total_input_tokens`)                                                                   | `» /compact at the next break · 520k re-read each turn, ~$0.10`                                                                                           |
+  | a 5h or 7d window `at-risk`                                                                                    | `» /model sonnet for routine steps · keep Opus for the hard ones`                                                                                         |
+  | a record closed and `cc-spend record` not run since                                                            | `» record #2 done: 4/5 habits better · cc-spend record` (`feed.json.record.notice`)                                                                       |
+  | else the first non-snoozed finding except R8                                                                   | `» <rule action> · ~$X/<window>` (`RULE_INFO.action`; the title in feeds written before it)                                                               |
 
   R8 is skipped there: the `warnings` part already shows when a limit runs
   out. On by default, on the second row before the limit warnings.

@@ -353,7 +353,11 @@ export function renderStatusline(
       case "month":
         return budget ? monthPart(state) : "";
       case "coach": {
-        const action = nextAction(payload, state);
+        const action = nextAction(
+          payload,
+          state,
+          layout.some((row) => row.includes("cache")),
+        );
         const latest = state?.claudeCodeLatest ?? undefined;
         const update = isNewer(latest, payload.version)
           ? rgb("0;200;200", `⬆ claude ${String(latest)}`)

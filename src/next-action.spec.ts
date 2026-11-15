@@ -60,6 +60,10 @@ describe("nextAction", () => {
       kind: "cold-soon",
       text: "send now or /compact · cache cold in 45s, then +$1.22",
     });
+    // The cache part already shows the countdown and the $: no second copy.
+    expect(nextAction(payload(500_000), s, true)?.text).toBe(
+      "send now or /compact before the cache goes cold",
+    );
     // cheap or unknown premium, unknown countdown, or more time left: no warning
     expect(
       nextAction(

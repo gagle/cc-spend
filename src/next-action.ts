@@ -31,7 +31,12 @@ export interface NextAction {
   readonly text: string;
 }
 
-export function nextAction(payload: HookPayload, state: StatuslineState | null): NextAction | null {
+/** `cacheShown`: the cache part is on the statusline too, so the action leaves its countdown and $ to it. */
+export function nextAction(
+  payload: HookPayload,
+  state: StatuslineState | null,
+  cacheShown = false,
+): NextAction | null {
   if (state === null) return null;
   const cache = state.cache;
   if (cache !== null) {
@@ -44,7 +49,9 @@ export function nextAction(payload: HookPayload, state: StatuslineState | null):
     ) {
       return {
         kind: "cold-soon",
-        text: `send now or /compact · cache cold in ${String(cache.secondsUntilCold)}s, then +${money(premium)}`,
+        text: cacheShown
+          ? "send now or /compact before the cache goes cold"
+          : `send now or /compact · cache cold in ${String(cache.secondsUntilCold)}s, then +${money(premium)}`,
       };
     }
     const cold = cache.nextColdUsd ?? 0;
