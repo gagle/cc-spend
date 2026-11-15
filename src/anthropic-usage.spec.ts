@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type * as NodeOs from "node:os";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -278,7 +279,6 @@ describe("anthropic-usage.ts", () => {
         sevenDay: { ...window, pct: 7, resetsAt: null },
         extraWindows: [{ ...window, key: "opus", pct: 30, resetsAt: null }],
         claudeCodeShare: 0.8,
-        resets: [],
       });
     });
 
@@ -298,44 +298,33 @@ describe("anthropic-usage.ts", () => {
         sevenDay: null,
         extraWindows: [],
         claudeCodeShare: null,
-        resets: [],
       });
     });
 
-    it("reads unused, unpaused reset grants only when the account is eligible", async () => {
-      const grants = [
-        { resets_left: 1, ends_at: "2026-11-17T07:59:00+00:00", paused: false },
-        { resets_left: 2, ends_at: null },
-        { resets_left: 1, ends_at: "nope" },
-        { resets_left: 0, ends_at: null },
-        { resets_left: 1, paused: true },
-        { ends_at: null },
-      ];
-      const fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ cedar_ember: { eligible: true, grants } }),
-      });
+    it("names cc-spend in the user agent on every request, never Claude Code; no cedar_ember", async () => {
+      const fetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
       vi.stubGlobal("fetch", fetch);
-      const { fetchUsage } = await freshModule();
-      expect((await fetchUsage("t"))?.resets).toEqual([
-        { left: 1, endsAt: Date.parse("2026-11-17T07:59:00Z") },
-        { left: 2, endsAt: null },
-        { left: 1, endsAt: null },
-      ]);
-      expect(String(fetch.mock.calls[0]?.[0])).toContain("/api/oauth/usage?cedar_ember=1");
-      expect(fetch.mock.calls[0]?.[1]).toMatchObject({
-        headers: { "User-Agent": expect.stringMatching(/^claude-cli\//) as unknown },
-      });
-      fetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ cedar_ember: { eligible: false, grants } }),
-      });
-      expect((await fetchUsage("t"))?.resets).toEqual([]);
-      fetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ cedar_ember: { eligible: true, grants: null } }),
-      });
-      expect((await fetchUsage("t"))?.resets).toEqual([]);
+      const { fetchUsage, fetchPlan, userAgent } = await freshModule();
+      await fetchUsage("t");
+      await fetchPlan("t", new Date(0));
+      const { version } = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
+      expect(userAgent()).toBe(`cc-spend/${version} (+https://github.com/gagle/cc-spend)`);
+      expect(String(fetch.mock.calls[0]?.[0])).toBe("https://api.anthropic.com/api/oauth/usage");
+      for (const [, init] of fetch.mock.calls as Array<
+        [string, { headers: Record<string, string> }]
+      >) {
+        expect(init.headers["User-Agent"]).toBe(userAgent());
+      }
+      expect(fetch).toHaveBeenCalledTimes(2);
+      const dir = mkdtempSync(path.join(tmpdir(), "ua-"));
+      writeFileSync(path.join(dir, "package.json"), JSON.stringify({ version: 1 }));
+      expect(userAgent(pathToFileURL(path.join(dir, "package.json")))).toBe(
+        "cc-spend/unknown (+https://github.com/gagle/cc-spend)",
+      );
+      expect(userAgent(pathToFileURL(path.join(dir, "missing.json")))).toBe(
+        "cc-spend/unknown (+https://github.com/gagle/cc-spend)",
+      );
+      rmSync(dir, { recursive: true, force: true });
     });
 
     it("fetchPlan maps the profile's organization; null without one", async () => {

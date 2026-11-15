@@ -84,7 +84,7 @@ describe("cc-spend CLI (built)", () => {
       rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     });
 
-    it("Pro: a fresh API reading with limit resets shows them at the end of a saved layout's first row", () => {
+    it("Pro: an old cache with limit resets and a layout naming `resets` render without them", () => {
       const home = sandbox("claude_pro");
       const root = path.join(home, ".config", "cc-spend");
       const dir = path.join(root, "accounts", "e2e_example_com");
@@ -107,10 +107,10 @@ describe("cc-spend CLI (built)", () => {
           ],
         }),
       );
-      // A layout saved before the resets part existed (v1).
+      // A layout saved while the resets part existed (v2).
       writeFileSync(
         path.join(root, "statusline.json"),
-        JSON.stringify({ schemaVersion: 1, rows: [["model", "limits"]] }),
+        JSON.stringify({ schemaVersion: 2, rows: [["model", "limits", "resets"]] }),
       );
       const payload = JSON.stringify({
         session_id: "e2e",
@@ -121,7 +121,7 @@ describe("cc-spend CLI (built)", () => {
         new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"),
         "",
       );
-      expect(line).toMatch(/^🤖 Opus \| ⏱ 40%\/5h 5%\/7d \| ↺ 2 resets · 1 by \S+/);
+      expect(line.trimEnd()).toBe("🤖 Opus | ⏱ 40%/5h 5%/7d");
       rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     });
 

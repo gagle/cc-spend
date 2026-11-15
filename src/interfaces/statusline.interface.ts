@@ -2,7 +2,6 @@ import type { CacheForecast, CachePayload } from "../cache-forecast.js";
 import type { Runway } from "../limits-history.js";
 import type {
   ApiExtraWindow,
-  ApiResetGrant,
   ApiWindow,
   ExtraUsageCacheEntry,
   RateLimitsCache,
@@ -84,7 +83,6 @@ export interface StatuslineState {
     readonly fiveHour: ApiWindow | null;
     readonly sevenDay: ApiWindow | null;
     readonly extraWindows: ReadonlyArray<ApiExtraWindow>;
-    readonly resets?: ReadonlyArray<ApiResetGrant>; // limit resets the account can still use
   } | null;
   readonly cache: CacheForecast | null;
   readonly promptUsd?: number | null; // $ of the prompt being processed (trackPrompt); null without prompt_id

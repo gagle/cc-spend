@@ -63,17 +63,18 @@ describe("loadLayout / saveLayout", () => {
     expect(loadLayout()).toBe(DEFAULT_LAYOUT);
   });
 
-  it("an older statusline.json gets the new resets part at the end of its first row, in memory", async () => {
+  it("an older statusline.json loads in memory, unchanged on disk; a saved `resets` id drops out", async () => {
     const { loadLayout, LAYOUT_FILE } = await fresh();
     mkdirSync(path.dirname(LAYOUT_FILE), { recursive: true });
     const v1 = JSON.stringify({ schemaVersion: 1, rows: [["cost", "limits"], ["coach"]] });
     writeFileSync(LAYOUT_FILE, v1);
-    expect(loadLayout()).toEqual([["cost", "limits", "resets"], ["coach"]]);
+    expect(loadLayout()).toEqual([["cost", "limits"], ["coach"]]);
     expect(readFileSync(LAYOUT_FILE, "utf8")).toBe(v1);
-    writeFileSync(LAYOUT_FILE, JSON.stringify({ rows: [["cost"], ["resets"]] }));
-    expect(loadLayout()).toEqual([["cost"], ["resets"]]);
-    writeFileSync(LAYOUT_FILE, JSON.stringify({ schemaVersion: 1, rows: ["x", ["cost"]] }));
-    expect(loadLayout()).toEqual([["resets"], ["cost"]]);
+    writeFileSync(
+      LAYOUT_FILE,
+      JSON.stringify({ schemaVersion: 2, rows: [["cost", "resets"], ["resets"]] }),
+    );
+    expect(loadLayout()).toEqual([["cost"]]);
     writeFileSync(LAYOUT_FILE, JSON.stringify({ schemaVersion: 1, rows: "x" }));
     expect(loadLayout()).toEqual((await fresh()).DEFAULT_LAYOUT);
   });

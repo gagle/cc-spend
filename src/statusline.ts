@@ -500,7 +500,6 @@ export async function buildStatuslineState(
             fiveHour: api.fiveHour,
             sevenDay: api.sevenDay,
             extraWindows: api.extraWindows ?? [],
-            resets: api.resets ?? [],
           },
     cache,
     promptUsd,

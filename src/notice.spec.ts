@@ -29,6 +29,8 @@ describe("notice.ts", () => {
     const plain = calendarUnavailableNotice({ color: false }, "claude_pro", "subscription");
     expect(plain.split("\n")[0]).toBe("👤 Your plan: Claude Pro");
     expect(plain).not.toMatch(/[╭╮╰╯│]|cc-spend calendar/);
-    expect(calendarUnavailableNotice({ color: true }, "claude_pro", "subscription")).toContain("\x1b[");
+    expect(calendarUnavailableNotice({ color: true }, "claude_pro", "subscription")).toContain(
+      "\x1b[",
+    );
   });
 });

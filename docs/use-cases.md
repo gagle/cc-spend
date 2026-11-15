@@ -166,10 +166,6 @@ Claude Code cuts a line that does not fit with `…`; more lines is the fix.
     habit with its $ (`docs/coach.md`); on its own line by default.
     `⬆ claude 2.1.320` shows left of it when npm has a newer Claude Code than the
     running one (the hook payload `version`); the refresher reads npm, never the render.
-15. Pro/Max, when the 5h/7d windows apply to the session: `↺ 1 reset · by Nov 17`
-    (or `↺ 2 resets · 1 by Nov 17`), the limit resets the account can still
-    use and how many end first. Hidden with none left. Last in the first row
-    by default; older saved layouts get it there too.
 
 Before every part, not set in the layout: `⇄ <email>` for 10 minutes after a
 `/login` (in any terminal) moved this session to another account (see "Account
