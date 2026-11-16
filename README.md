@@ -1,32 +1,46 @@
 # cc-spend
 
-**See what Claude Code costs you, and build habits that make it cost less.**
+**Know what every Claude Code prompt costs, while you type it. Then spend less.**
+
+<!-- Pro / Max statusline -->
+<img src="https://raw.githubusercontent.com/gagle/cc-spend/main/media/statusline-pro-1.png" alt="cc-spend statusline on a Pro subscription" width="100%">
+<img src="https://raw.githubusercontent.com/gagle/cc-spend/main/media/statusline-pro-2.png" alt="cc-spend statusline on a Pro subscription, near the limit" width="100%">
+
+<!-- Team / Enterprise statusline -->
+<img src="https://raw.githubusercontent.com/gagle/cc-spend/main/media/statusline-enterprise.png" alt="cc-spend statusline on an Enterprise plan with a monthly budget" width="100%">
+
+<!-- cc-spend live -->
+<img src="https://raw.githubusercontent.com/gagle/cc-spend/main/media/live.png" alt="cc-spend live: every open session and what to do now" width="100%">
+
+<!-- cc-spend calendar -->
+<img src="https://raw.githubusercontent.com/gagle/cc-spend/main/media/calendar.png" alt="cc-spend calendar: work days, daily max and history" width="100%">
+
+```sh
+npm install -g @gllamas/cc-spend && cc-spend init
+```
+
+<details>
+<summary><b>Why cc-spend</b></summary>
 
 Claude Code bills by tokens. You rarely see what one prompt costs, so the
 habits that waste money stay hidden: a long session that re-reads everything,
 a cold cache, a big model on easy work. cc-spend puts the cost in front of you
 while you work, tells you what to change, and checks each week if it worked.
 
-## What you get
-
-| Where               | What it tells you                                                                  |
-| ------------------- | ---------------------------------------------------------------------------------- |
-| Statusline          | This session's $, this prompt's $, the cache, your limits or budget, one tip (`»`) |
-| `cc-spend insights` | What to change to spend less, with the $ and the exact fix                         |
-| `cc-spend record`   | Your habits this week against your start: better or worse? Runs by itself          |
-| `cc-spend report`   | Where the money went: by model, project, subagent, day, session                    |
-| `cc-spend live`     | A live view of every open session and what to do now                               |
-
-```
-(🌿 main) | ████████░░ ⚡ 42% | $1.80 | 🤖 Opus 5.5 | 🔥 cold in 4m · $0.04/req · if cold +$1.20 | $12.40/$30.00 (41%)
-» /compact at the next break · 520k re-read each turn, ~$0.10
-```
-
 - **Pro / Max:** your real 5h and 7d limits, when they run out, and when they reset.
 - **Team / Enterprise:** a monthly $ budget split over your work days
   (`$today/$max` and `$month/$cap`), with a calendar for days off.
 
-## Install
+The loop:
+
+1. **See.** The statusline shows the cost as you work, and the most useful tip (`»`).
+2. **Change.** `cc-spend insights` lists what costs you the most, with the fix.
+3. **Check.** `cc-spend record` shows if your habits got better.
+
+</details>
+
+<details>
+<summary><b>Install</b></summary>
 
 ```sh
 npm install -g @gllamas/cc-spend
@@ -38,11 +52,30 @@ at files that stay). `init` sets up the statusline; on Team/Enterprise it also
 asks for your work days and cap. After that there is nothing to do: cc-spend
 reads what Claude Code already writes.
 
-## The loop: see, change, check
+Each Claude account is tracked on its own, under `~/.config/cc-spend/`.
 
-1. **See.** The statusline shows the cost as you work, and the most useful tip.
-2. **Change.** `cc-spend insights` lists what costs you the most, with the fix.
-3. **Check.** `cc-spend record` shows if your habits got better.
+</details>
+
+<details>
+<summary><b>Commands</b></summary>
+
+```sh
+cc-spend init         # first-run setup
+cc-spend statusline   # install or update the statusline
+cc-spend insights     # what to change to spend less, with $ and the fix
+cc-spend record       # your habits week by week against your baseline (--all, --days N)
+cc-spend report       # $ by model, project, subagent, … (week by default; --chart, --session <id>)
+cc-spend live         # live view of every open session (Tab: details, q: quit)
+cc-spend calendar     # work days, daily max, history (Team/Enterprise)
+cc-spend settings     # choose and order the statusline parts
+cc-spend doctor       # check Node, Claude Code, the statusline, hooks, files
+cc-spend uninstall    # remove it and restore your old statusline
+```
+
+</details>
+
+<details>
+<summary><b><code>cc-spend record</code>: are your habits getting better?</b></summary>
 
 `record` needs no start or stop. The first week starts by itself, and the 7
 days before it become your baseline. Each week closes by itself and the next
@@ -66,24 +99,10 @@ It scores how you work, not how much: a busy week does not look worse. Each
 week gets one focus (your costliest habit) and shows if it went down.
 `--all` lists every week, `--days 14` changes the length.
 
-## Commands
+</details>
 
-```sh
-cc-spend init         # first-run setup
-cc-spend statusline   # install or update the statusline
-cc-spend insights     # what to change to spend less, with $ and the fix
-cc-spend record       # your habits week by week against your baseline (--all, --days N)
-cc-spend report       # $ by model, project, subagent, … (week by default; --chart, --session <id>)
-cc-spend live         # live view of every open session (Tab: details, q: quit)
-cc-spend calendar     # work days, daily max, history (Team/Enterprise)
-cc-spend settings     # choose and order the statusline parts
-cc-spend doctor       # check Node, Claude Code, the statusline, hooks, files
-cc-spend uninstall    # remove it and restore your old statusline
-```
-
-Each Claude account is tracked on its own, under `~/.config/cc-spend/`.
-
-## What `insights` checks
+<details>
+<summary><b>What <code>insights</code> checks</b></summary>
 
 `cc-spend insights` ranks what to change, each finding with its $ over
 the last 7 days (`--month` for 30), the evidence, why it costs and the fix.
@@ -111,7 +130,10 @@ All $ are API-equivalent estimates from your local transcripts, not a bill. On
 Pro/Max each $ also shows as points of the 7-day limit, once cc-spend has
 measured the $ per 1%.
 
-## Privacy
+</details>
+
+<details>
+<summary><b>Privacy</b></summary>
 
 No server, no analytics. The only network calls go to Anthropic's read-only
 endpoints that Claude Code already uses (`/api/oauth/usage`,
@@ -124,8 +146,13 @@ how many prompts, `/clear`, `/compact` and `/model` you used. It reads the
 size of your CLAUDE.md and MEMORY.md files. **No message text is stored, and
 nothing is sent anywhere.**
 
-## Development
+</details>
+
+<details>
+<summary><b>Development</b></summary>
 
 ```sh
 pnpm install && pnpm build && pnpm test
 ```
+
+</details>
