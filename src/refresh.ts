@@ -13,6 +13,7 @@ import {
 } from "./anthropic-usage.js";
 import {
   accountDir,
+  CONFIG_ROOT_DIR,
   loadApiCache,
   loadConfig,
   loadLimitSamples,
@@ -20,6 +21,7 @@ import {
   loadUsage,
   saveApiCache,
   saveFeed,
+  sweepStaleTemps,
 } from "./config.js";
 
 /** A refresher that died without removing its lock stops blocking new ones after this long. */
@@ -73,10 +75,11 @@ export function requestApiRefresh(accountKey: string, now: Date): boolean {
 
 /** Rebuilds feed.json from the account's files (the /cost-tracker mod reads it). Lazy: never on render. */
 export async function writeFeed(accountKey: string, now: Date): Promise<void> {
-  const [{ buildFeed }, { hasUnpricedTurns }, { adviceFor }] = await Promise.all([
+  const [{ buildFeed }, { hasUnpricedTurns }, { adviceFor }, { recordFeed }] = await Promise.all([
     import("./feed.js"),
     import("./report.js"),
     import("./insights.js"),
+    import("./record-store.js"),
   ]);
   const config = loadConfig(accountKey);
   const usage = loadUsage(accountKey, now);
@@ -95,6 +98,7 @@ export async function writeFeed(accountKey: string, now: Date): Promise<void> {
   saveFeed(accountKey, {
     ...feed,
     advice: adviceFor(accountKey, "week", feed, config, usage, now),
+    record: recordFeed(accountKey),
   });
 }
 
@@ -112,9 +116,29 @@ export async function runRefresh(accountKey: string, now: Date = new Date()): Pr
     const next = nextApiCache(previous, outcome, now);
     const planDue = next.plan === undefined || now.getTime() - next.plan.fetchedAt >= PLAN_TTL_MS;
     const plan = token && "usage" in outcome && planDue ? await fetchPlan(token.token, now) : null;
-    saveApiCache(accountKey, plan === null ? next : { ...next, plan });
-    const { runIndexPass } = await import("./transcript-index.js");
-    runIndexPass({ now }); // bounded; the rest waits for the next refresh
+    const { fetchClaudeCodeLatest, isLatestDue } = await import("./claude-code-version.js");
+    const latest = isLatestDue(next, now) ? await fetchClaudeCodeLatest(now) : null;
+    saveApiCache(accountKey, {
+      ...next,
+      ...(plan === null ? {} : { plan }),
+      ...(latest === null ? {} : { claudeCodeLatest: latest }),
+    });
+    const { INDEX_DIR, ownerIndexDir, runIndexPass } = await import("./transcript-index.js");
+    const pass = runIndexPass({ now }); // bounded; the rest waits for the next refresh
+    // Temps of writers killed between write and rename (wall clock: mtimes are real).
+    for (const dir of [
+      CONFIG_ROOT_DIR,
+      accountDir(accountKey),
+      INDEX_DIR,
+      ownerIndexDir(accountKey),
+    ]) {
+      sweepStaleTemps(dir);
+    }
+    // A record starts or closes only on a complete index: a half-read one would freeze wrong numbers.
+    if (pass !== null && pass.bytesBehind === 0) {
+      const { advanceRecord } = await import("./record-store.js");
+      advanceRecord(accountKey, now);
+    }
     await writeFeed(accountKey, now);
   } catch {
     // A failed refresh keeps the previous files; the next render asks again after the TTL.

@@ -14,6 +14,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { accountAt } from "./account.js";
+import { localDateKey } from "./clock.js";
 import {
   ACCOUNTS_DIR,
   CONFIG_ROOT_DIR,
@@ -29,12 +30,16 @@ import {
   addTurn,
   type CcModelUsage,
   contextTokens,
+  emptyHabits,
   emptyRollup,
+  type HabitLine,
+  type Habits,
   mcpServersUsed,
   mergeRollup,
   parseActivity,
   parseApiError,
   parseCostState,
+  parseHabit,
   parseMcpLoad,
   parseTurn,
   priceTurn,
@@ -46,6 +51,9 @@ import {
 
 /** Format version of every index file. */
 export const INDEX_SCHEMA_VERSION = 1;
+
+/** The tool an assistant line calls (Claude Code writes `type`, `id`, `name` in this order). */
+const TOOL_USE_NAME = /"type":"tool_use","id":"[^"]*","name":"([^"]+)"/;
 /** Owner of sessions no account's sessions-map.json knows (no statusline ran for them). */
 export const UNATTRIBUTED = "unattributed";
 /** One pass stops starting new files after this many bytes or this long; the rest waits for the next. */
@@ -74,6 +82,9 @@ interface FileOffset {
   mtimeMs: number;
   recent: Array<string>;
   context?: number; // context tokens of the file's last turn (the efficiency split needs the previous one)
+  at?: string; // ISO time of the file's last turn (the next turn's gap)
+  tool?: string; // the last tool called, so a wait that spans two passes still knows it
+  afterTool?: true; // a tool result came after the last turn
 }
 
 /** Per-session totals (sessions.json). */
@@ -95,6 +106,7 @@ export interface SessionTotals {
   mcpUsed?: Array<string>; // MCP servers the session called
   attributedUsd?: Record<string, number>; // `skill:<name>` / `mcp:<server>` → $ Claude Code attributed to it
   apiErrors?: Record<string, number>; // `429 usage_limit_reached`, … → failed requests
+  toolWaitUsd?: Record<string, number>; // tool name → $ re-written because its result came after the cache TTL
   // Claude Code's own cost per process run (`cost-state`), keyed by the run's start (epoch ms as a string).
   ccRuns?: Record<string, ClaudeCodeRun>;
 }
@@ -124,6 +136,7 @@ export interface RepriceResult {
 interface OwnerSnapshot {
   readonly months: Map<string, Record<string, Rollup>>;
   readonly sessions: Record<string, SessionTotals>;
+  readonly habits: Record<string, Habits>;
 }
 
 function readVersioned(file: string, key: string): Record<string, unknown> {
@@ -233,6 +246,30 @@ function sessionOwners(): (sessionId: string, at?: string) => string {
 interface OwnerDelta {
   readonly months: Map<string, Map<string, Rollup>>; // YYYY-MM → row key → delta
   readonly sessions: Map<string, SessionDelta>;
+  readonly habits: Map<string, Habits>; // local day → counts
+}
+
+function emptyOwnerDelta(): OwnerDelta {
+  return { months: new Map(), sessions: new Map(), habits: new Map() };
+}
+
+/** Adds one habit line to its local day; a line with a bad time is dropped. */
+function addHabit(delta: OwnerDelta, habit: HabitLine): void {
+  const time = new Date(habit.timestamp);
+  if (Number.isNaN(time.getTime())) return;
+  const day = localDateKey(time);
+  const counts = delta.habits.get(day) ?? emptyHabits();
+  counts[habit.kind] += 1;
+  delta.habits.set(day, counts);
+}
+
+/** Adds each day's counts of `add` into `into`, key by key. */
+function mergeHabits(into: Record<string, Habits>, add: Iterable<[string, Habits]>): void {
+  for (const [day, counts] of add) {
+    const sum = { ...emptyHabits(), ...into[day] };
+    for (const kind of Object.keys(counts) as Array<keyof Habits>) sum[kind] += counts[kind];
+    into[day] = sum;
+  }
 }
 
 interface SessionDelta {
@@ -246,6 +283,7 @@ interface SessionDelta {
   mcpUsed: Set<string>;
   attributedUsd: Map<string, number>;
   apiErrors: Map<string, number>;
+  toolWaitUsd: Map<string, number>;
   ccRuns: Map<string, ClaudeCodeRun>;
 }
 
@@ -261,6 +299,7 @@ function emptySessionDelta(): SessionDelta {
     mcpUsed: new Set(),
     attributedUsd: new Map(),
     apiErrors: new Map(),
+    toolWaitUsd: new Map(),
     ccRuns: new Map(),
   };
 }
@@ -303,6 +342,12 @@ function mcpTotals(
 
 function applyDelta(owner: string, delta: OwnerDelta): void {
   const dir = ownerIndexDir(owner);
+  if (delta.habits.size > 0) {
+    const habitsFile = path.join(dir, "habits.json");
+    const days = readVersioned(habitsFile, "days") as Record<string, Habits>;
+    mergeHabits(days, delta.habits);
+    writeVersioned(habitsFile, "days", days);
+  }
   for (const [month, rows] of delta.months) {
     const file = path.join(dir, `${month}.json`);
     const stored = readVersioned(file, "rows") as Record<string, Rollup>;
@@ -325,6 +370,9 @@ function applyDelta(owner: string, delta: OwnerDelta): void {
       ...mcpTotals(prior, add),
       attributedUsd: addCounts(prior?.attributedUsd, add.attributedUsd),
       apiErrors: addCounts(prior?.apiErrors, add.apiErrors),
+      ...(prior?.toolWaitUsd || add.toolWaitUsd.size > 0
+        ? { toolWaitUsd: addCounts(prior?.toolWaitUsd, add.toolWaitUsd) }
+        : {}),
       ...(prior?.ccRuns || add.ccRuns.size > 0
         ? { ccRuns: mergeRuns(prior?.ccRuns, add.ccRuns) }
         : {}),
@@ -391,7 +439,8 @@ function startReprice(from: string): Map<string, OwnerSnapshot> {
       string,
       SessionTotals
     >;
-    snapshots.set(owner, { months, sessions });
+    const habits = readVersioned(path.join(saved, "habits.json"), "days") as Record<string, Habits>;
+    snapshots.set(owner, { months, sessions, habits });
     rmSync(ownerIndexDir(owner), { recursive: true, force: true });
   }
   return snapshots;
@@ -459,8 +508,26 @@ function finishReprice(from: string, snapshots: Map<string, OwnerSnapshot>): Rep
       sessionsKept += 1;
     }
     writeVersioned(file, "sessions", sessions);
+    // Days whose transcripts are all gone keep their old counts.
+    const habitsFile = path.join(dir, "habits.json");
+    const days = readVersioned(habitsFile, "days") as Record<string, Habits>;
+    const lost = Object.entries(snapshot.habits).filter(([day]) => days[day] === undefined);
+    if (lost.length > 0) {
+      mergeHabits(days, lost);
+      writeVersioned(habitsFile, "days", days);
+    }
   }
+  pruneRepriceBackups(from);
   return { from, rowsKept, sessionsKept, rowsShort };
+}
+
+/** Keeps only the backup this re-price took: older ones were superseded by a re-price that already succeeded. */
+function pruneRepriceBackups(kept: string): void {
+  for (const name of readdirSync(INDEX_DIR)) {
+    if (name.startsWith("backup-prices-") && name !== `backup-prices-${kept}`) {
+      rmSync(path.join(INDEX_DIR, name), { recursive: true, force: true });
+    }
+  }
 }
 
 /** Takes the global index lock; false while a live pass holds it. Wall clock: the lock's mtime is real. */
@@ -512,7 +579,9 @@ export function runIndexPass(
     let filesRead = 0;
     let turns = 0;
 
+    const listed = new Set<string>();
     for (const file of listTranscripts(options.root)) {
+      listed.add(file);
       let stat;
       try {
         stat = statSync(file);
@@ -537,6 +606,12 @@ export function runIndexPass(
       const recent = from === 0 || !prior ? [] : [...prior.recent];
       // The previous turn's context in this thread; unknown when resuming a file indexed before it was kept.
       let context: number | null = from === 0 ? 0 : (prior?.context ?? null);
+      // The previous turn's time; whether a tool result came after it, and the last tool called.
+      const resumed = from === 0 ? undefined : prior;
+      let lastAt: string | null = resumed?.at ?? null;
+      let afterTool = resumed?.afterTool === true;
+      let lastTool = resumed?.tool ?? "unknown";
+      let lineTool: string | undefined;
       const scope = scopeOf(file);
       // Claude Code repeats a line once per content block: true for a key seen in the last RECENT_KEYS.
       const repeated = (key: string): boolean => {
@@ -546,13 +621,17 @@ export function runIndexPass(
         return false;
       };
       const sessionDelta = (sessionId: string, owner = ownerOf(sessionId)): SessionDelta => {
-        const delta: OwnerDelta = deltas.get(owner) ?? { months: new Map(), sessions: new Map() };
+        const delta = deltas.get(owner) ?? emptyOwnerDelta();
         deltas.set(owner, delta);
         const session = delta.sessions.get(sessionId) ?? emptySessionDelta();
         delta.sessions.set(sessionId, session);
         return session;
       };
       for (const line of lines) {
+        if (line.includes('"type":"user"')) afterTool = line.includes('"tool_result"');
+        // A turn's own tool_use counts from the next line on: the tool whose result a later turn waited for.
+        if (lineTool !== undefined) lastTool = lineTool;
+        lineTool = TOOL_USE_NAME.exec(line)?.[1];
         const called = mcpServersUsed(line);
         if (called !== null) {
           const session = sessionDelta(called.sessionId);
@@ -585,6 +664,14 @@ export function runIndexPass(
             session.apiErrors.set(error.kind, (session.apiErrors.get(error.kind) ?? 0) + 1);
             continue;
           }
+          const habit = scope === "main" ? parseHabit(line) : null;
+          if (habit !== null) {
+            const owner = ownerOf(habit.sessionId, habit.timestamp);
+            const delta = deltas.get(owner) ?? emptyOwnerDelta();
+            deltas.set(owner, delta);
+            addHabit(delta, habit);
+            continue;
+          }
           const activity = parseActivity(line);
           if (activity === null) continue;
           const session = sessionDelta(activity.sessionId);
@@ -596,19 +683,22 @@ export function runIndexPass(
         const key = turnRowKey(turn, scope);
         if (key === null) continue;
         const owner = ownerOf(turn.sessionId, turn.timestamp);
-        let delta = deltas.get(owner);
-        if (!delta) {
-          delta = { months: new Map(), sessions: new Map() };
-          deltas.set(owner, delta);
-        }
+        const delta = deltas.get(owner) ?? emptyOwnerDelta();
+        deltas.set(owner, delta);
         const month = key.day.slice(0, 7);
         const rows = delta.months.get(month) ?? new Map<string, Rollup>();
         delta.months.set(month, rows);
         const row = rows.get(rowKey(key)) ?? emptyRollup();
         rows.set(rowKey(key), row);
         const cost = priceTurn(turn);
-        addTurn(row, turn, cost, context);
+        const gap =
+          lastAt === null
+            ? null
+            : { seconds: (Date.parse(turn.timestamp) - Date.parse(lastAt)) / 1000, afterTool };
+        const toolWait = addTurn(row, turn, cost, context, gap);
         context = contextTokens(turn);
+        lastAt = turn.timestamp;
+        afterTool = false;
         const usd =
           cost === null
             ? 0
@@ -622,6 +712,9 @@ export function runIndexPass(
         ]) {
           if (name) session.attributedUsd.set(name, (session.attributedUsd.get(name) ?? 0) + usd);
         }
+        if (toolWait > 0) {
+          session.toolWaitUsd.set(lastTool, (session.toolWaitUsd.get(lastTool) ?? 0) + toolWait);
+        }
         if (cost === null) session.unpriced += 1;
         if (scope !== "main") session.subagentUsd += usd;
         turns += 1;
@@ -632,12 +725,17 @@ export function runIndexPass(
         mtimeMs: stat.mtimeMs,
         recent,
         ...(context === null ? {} : { context }),
+        ...(lastAt === null ? {} : { at: lastAt }),
+        ...((lineTool ?? lastTool) === "unknown" ? {} : { tool: lineTool ?? lastTool }),
+        ...(afterTool ? { afterTool: true as const } : {}),
       };
     }
 
     for (const [owner, delta] of deltas) applyDelta(owner, delta);
     const repriced = reprice === null ? undefined : finishReprice(reprice.from, reprice.snapshots);
-    writeVersioned(offsetsFile, "files", offsets);
+    // A transcript Claude Code deleted (cleanupPeriodDays) never comes back: its offset only grows the file.
+    const kept = Object.entries(offsets).filter(([file]) => listed.has(file));
+    writeVersioned(offsetsFile, "files", Object.fromEntries(kept));
     if (reprice !== null || typeof storedPrices !== "string") {
       writeVersioned(pricesFile, "prices", { version: PRICES_VERSION });
     }
@@ -669,6 +767,17 @@ export function loadRollups(owner: string, months: ReadonlyArray<string>): Map<s
     }
   }
   return rows;
+}
+
+/** Habit counts of one owner, local day → counts; empty before the first pass that counted them. */
+export function loadHabits(owner: string): Record<string, Habits> {
+  const days = readVersioned(path.join(ownerIndexDir(owner), "habits.json"), "days");
+  return Object.fromEntries(
+    Object.entries(days).map(([day, counts]) => [
+      day,
+      { ...emptyHabits(), ...(counts as Partial<Habits>) },
+    ]),
+  );
 }
 
 export function loadSessionTotals(owner: string): Record<string, SessionTotals> {

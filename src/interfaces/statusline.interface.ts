@@ -2,7 +2,6 @@ import type { CacheForecast, CachePayload } from "../cache-forecast.js";
 import type { Runway } from "../limits-history.js";
 import type {
   ApiExtraWindow,
-  ApiResetGrant,
   ApiWindow,
   ExtraUsageCacheEntry,
   RateLimitsCache,
@@ -33,6 +32,7 @@ export interface HookPayload extends CachePayload {
   readonly context_window?: {
     readonly total_input_tokens?: number;
     readonly used_percentage?: number | null;
+    readonly context_window_size?: number; // the model's full window (200000, 1000000)
   };
   readonly rate_limits?: {
     readonly five_hour?: { readonly used_percentage?: number; readonly resets_at?: number };
@@ -83,7 +83,6 @@ export interface StatuslineState {
     readonly fiveHour: ApiWindow | null;
     readonly sevenDay: ApiWindow | null;
     readonly extraWindows: ReadonlyArray<ApiExtraWindow>;
-    readonly resets?: ReadonlyArray<ApiResetGrant>; // limit resets the account can still use
   } | null;
   readonly cache: CacheForecast | null;
   readonly promptUsd?: number | null; // $ of the prompt being processed (trackPrompt); null without prompt_id
@@ -98,4 +97,5 @@ export interface StatuslineState {
   readonly hasSpendCap: boolean;
   readonly planType: string | null;
   readonly accountSwitch?: string | null; // the new login, for a few minutes after a `/login` moved this session
+  readonly claudeCodeLatest?: string | null; // npm `latest` of Claude Code, read by the refresher
 }

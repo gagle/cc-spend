@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import type * as NodeOs from "node:os";
@@ -426,13 +427,13 @@ describe("config.ts", () => {
     expect(readFileSync(limitsFile("acct"), "utf8")).toBe(newer);
   });
 
-  it("feed advice: written by saveFeed, empty when missing or not a list", async () => {
-    const { saveFeed, loadFeedAdvice, feedFile } = await freshConfigModule();
-    expect(loadFeedAdvice("acct")).toEqual([]);
-    saveFeed("acct", { schemaVersion: 1, advice: [{ id: "R1" }] });
-    expect(loadFeedAdvice("acct")).toEqual([{ id: "R1" }]);
-    writeFileSync(feedFile("acct"), JSON.stringify({ schemaVersion: 1, advice: {} }));
-    expect(loadFeedAdvice("acct")).toEqual([]);
+  it("feed coach: advice and the record note in one read, empty when missing or malformed", async () => {
+    const { saveFeed, loadFeedCoach, feedFile } = await freshConfigModule();
+    expect(loadFeedCoach("acct")).toEqual({ advice: [], recordNotice: null });
+    saveFeed("acct", { schemaVersion: 1, advice: [{ id: "R1" }], record: { notice: "done" } });
+    expect(loadFeedCoach("acct")).toEqual({ advice: [{ id: "R1" }], recordNotice: "done" });
+    writeFileSync(feedFile("acct"), JSON.stringify({ schemaVersion: 1, advice: {}, record: null }));
+    expect(loadFeedCoach("acct")).toEqual({ advice: [], recordNotice: null });
   });
 
   it("backupFile keeps the newest three and never throws", async () => {
@@ -455,6 +456,26 @@ describe("config.ts", () => {
     writeFileAtomic(file, "{}");
     expect(readFileSync(file, "utf8")).toBe("{}");
     expect(readdirSync(path.dirname(file))).toEqual(["f.json"]);
+  });
+
+  it("sweepStaleTemps removes only old <name>.<pid>.tmp files and never throws", async () => {
+    const { sweepStaleTemps } = await freshConfigModule();
+    const now = Date.now();
+    for (const name of ["usage.json.123.tmp", "fresh.json.456.tmp", "notes.tmp", "usage.json"]) {
+      writeFileSync(path.join(fakeHome, name), "");
+    }
+    const old = new Date(now - 120_000);
+    utimesSync(path.join(fakeHome, "usage.json.123.tmp"), old, old);
+    utimesSync(path.join(fakeHome, "notes.tmp"), old, old);
+    sweepStaleTemps(fakeHome, now);
+    const names = readdirSync(fakeHome);
+    expect(names).not.toContain("usage.json.123.tmp");
+    expect(names).toEqual(
+      expect.arrayContaining(["fresh.json.456.tmp", "notes.tmp", "usage.json"]),
+    );
+    expect(() => {
+      sweepStaleTemps(path.join(fakeHome, "missing"), now);
+    }).not.toThrow();
   });
 
   it("lists account folders and peeks one session read-only", async () => {

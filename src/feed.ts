@@ -43,6 +43,7 @@ export interface Finding {
   readonly why?: string; // what makes it cost money (absent in feeds written before 2026-10-18)
   readonly action?: string; // a few words: what to do (absent in feeds written before 2026-10-18)
   readonly usd: number | null;
+  readonly weekPct?: number; // Pro/Max: usd as points of the 7d limit per week; absent with no $ per 1% yet
   readonly window: "week" | "month";
   readonly evidence: string;
   readonly fix: {
@@ -82,6 +83,7 @@ export interface Feed {
     readonly isFloor: boolean; // true when an unpriced model was seen
   };
   readonly advice: ReadonlyArray<Finding>;
+  readonly record?: { readonly notice: string | null }; // a record that closed unseen; absent before `record`
 }
 
 export interface FeedInput {

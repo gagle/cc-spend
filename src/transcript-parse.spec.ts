@@ -4,6 +4,7 @@ import {
   addTurn,
   contextTokens,
   DEEP_CONTEXT_TOKENS,
+  emptyHabits,
   emptyRollup,
   mcpServerKey,
   mcpServersUsed,
@@ -12,6 +13,7 @@ import {
   parseApiError,
   parseCompaction,
   parseCostState,
+  parseHabit,
   parseMcpLoad,
   parseRowKey,
   parseTurn,
@@ -166,6 +168,52 @@ describe("parseTurn", () => {
     expect(parseActivity('{"subtype":"turn_duration"')).toBeNull();
     expect(parseActivity(JSON.stringify({ type: "user", subtype: "turn_duration" }))).toBeNull();
     expect(parseActivity(system({ subtype: "other", note: "turn_duration" }))).toBeNull();
+  });
+
+  it("parseHabit reads prompts, interrupts, /clear, /model and compactions; anything else is null", () => {
+    const at = { sessionId: "s1", timestamp: "2026-11-12T09:00:00.000Z" };
+    const user = (content: unknown, fields: Record<string, unknown> = {}): string =>
+      JSON.stringify({ type: "user", ...at, message: { role: "user", content }, ...fields });
+    const kind = (line: string): string | null => parseHabit(line)?.kind ?? null;
+    expect(parseHabit(user("fix the bug"))).toEqual({ ...at, kind: "prompt" });
+    expect(kind(user([{ type: "image" }, { type: "text", text: "see [Image #1]" }]))).toBe(
+      "prompt",
+    );
+    expect(kind(user([{ type: "text", text: "[Request interrupted by user]" }]))).toBe("interrupt");
+    expect(kind(user("<command-name>/clear</command-name>\n<command-message>"))).toBe("clear");
+    expect(kind(user("<command-name>/model</command-name>"))).toBe("model");
+    expect(kind(user("<command-name>/compact</command-name>"))).toBeNull(); // the boundary counts it
+    expect(kind(user("<local-command-stdout>ok</local-command-stdout>"))).toBeNull();
+    expect(kind(user("<task-notification>done</task-notification>"))).toBeNull();
+    expect(kind(user("   "))).toBeNull();
+    expect(kind(user("hi", { isMeta: true }))).toBeNull();
+    expect(kind(user("hi", { isSidechain: true }))).toBeNull();
+    expect(kind(user("summary", { isCompactSummary: true }))).toBeNull();
+    expect(kind(user([{ type: "tool_result", content: "x" }]))).toBeNull();
+    expect(kind(user([null, { type: "image" }]))).toBeNull();
+    expect(kind(user(42))).toBeNull();
+    expect(kind(JSON.stringify({ type: "user", ...at }))).toBeNull();
+    expect(
+      kind(JSON.stringify({ type: "user", sessionId: "s1", message: { content: "hi" } })),
+    ).toBe(null);
+    expect(kind(JSON.stringify({ type: "assistant", ...at, note: '"type":"user"' }))).toBeNull();
+    expect(kind('{"type":"user"')).toBeNull();
+    expect(kind(usageLine())).toBeNull();
+    const boundary = (trigger: unknown, timestamp: unknown = at.timestamp): string =>
+      JSON.stringify({
+        type: "system",
+        subtype: "compact_boundary",
+        sessionId: "s1",
+        timestamp,
+        compactMetadata: { trigger },
+      });
+    expect(parseHabit(boundary("manual"))).toEqual({ ...at, kind: "compact" });
+    expect(kind(boundary("auto"))).toBe("autoCompact");
+    expect(kind(boundary("manual", 7))).toBeNull();
+  });
+
+  it("emptyHabits is all zero", () => {
+    expect(Object.values(emptyHabits())).toEqual([0, 0, 0, 0, 0, 0]);
   });
 
   it("skips non-usage lines, garbage and synthetic messages", () => {
@@ -365,6 +413,59 @@ describe("addTurn efficiency split", () => {
     const unknown = emptyRollup();
     addTurn(unknown, turn, priceTurn(turn));
     expect(unknown).toMatchObject({ growth: 0, usdNewWork: 0 });
+  });
+});
+
+describe("addTurn cache what-ifs", () => {
+  const base = parseTurn(usageLine());
+  if (!base) throw new Error("turn");
+  // 240k already cached, cache missed: the whole 250k written again at the 5m rate.
+  const turn = {
+    ...base,
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite5m: 250_000,
+    cacheWrite1h: 0,
+  };
+  const cost = priceTurn(turn);
+  if (!cost) throw new Error("cost");
+  const rewriteUsd = splitTurn(turn, cost, 240_000).rewriteUsd;
+
+  it("prices the 1h writes' extra on every priced turn, and the deep part of a rewrite", () => {
+    const first = emptyRollup();
+    expect(addTurn(first, turn, cost)).toBe(0);
+    expect(first.oneHourExtraUsd).toBeCloseTo((250_000 * (8 - 5)) / 1e6, 9); // Opus 5.5: $4 input, 1h 2×, 5m 1.25×
+    expect(first.deepRewriteUsd).toBe(0); // no previous context, no rewrite known
+    const rollup = emptyRollup();
+    addTurn(rollup, turn, cost, 240_000);
+    expect(rewriteUsd).toBeGreaterThan(0);
+    expect(rollup.deepRewriteUsd).toBeCloseTo(rewriteUsd * (50 / 250), 9);
+    expect(rollup).toMatchObject({ ttlSaveUsd: 0, toolWaitRewriteUsd: 0 });
+  });
+
+  it("a 5-60 min gap: a 1h cache would have read it; after a tool result it is a tool wait", () => {
+    const afterTool = emptyRollup();
+    expect(addTurn(afterTool, turn, cost, 240_000, { seconds: 600, afterTool: true })).toBeCloseTo(
+      rewriteUsd,
+      9,
+    );
+    expect(afterTool.ttlSaveUsd).toBeCloseTo(rewriteUsd * (1 - 0.05 / 1.25), 9);
+    expect(afterTool.toolWaitRewriteUsd).toBeCloseTo(rewriteUsd, 9);
+    const afterPrompt = emptyRollup();
+    expect(addTurn(afterPrompt, turn, cost, 240_000, { seconds: 600, afterTool: false })).toBe(0);
+    expect(afterPrompt.ttlSaveUsd).toBeCloseTo(afterTool.ttlSaveUsd, 9);
+    const long = emptyRollup();
+    addTurn(long, turn, cost, 240_000, { seconds: 7200, afterTool: true });
+    expect(long.ttlSaveUsd).toBe(0); // past an hour a 1h cache expires too
+    expect(long.toolWaitRewriteUsd).toBeCloseTo(rewriteUsd, 9);
+    const warm = emptyRollup();
+    expect(addTurn(warm, turn, cost, 240_000, { seconds: 120, afterTool: true })).toBe(0);
+    expect(warm).toMatchObject({ ttlSaveUsd: 0, toolWaitRewriteUsd: 0 });
+    const unpriced = emptyRollup();
+    const future = { ...turn, model: "claude-future-9" };
+    expect(addTurn(unpriced, future, null, 240_000, { seconds: 600, afterTool: true })).toBe(0);
+    expect(unpriced).toMatchObject({ oneHourExtraUsd: 0, deepRewriteUsd: 0 });
   });
 });
 

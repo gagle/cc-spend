@@ -53,6 +53,7 @@ const DOC_MAP = {
     "src/report.ts",
     "src/refresh.ts",
   ],
+  "docs/record.md": ["src/record.ts", "src/record-store.ts"],
   "docs/history-and-feed.md": [
     "src/limits-history.ts",
     "src/sessions-map.ts",
@@ -80,6 +81,7 @@ const DOC_MAP = {
     "src/statusline-layout.ts",
     "src/notice.ts",
     "src/statusline-render.ts",
+    "src/claude-code-version.ts",
   ],
   "docs/performance.md": [
     "src/statusline.ts",

@@ -1,6 +1,7 @@
 import { localDateKey } from "./clock.js";
 import {
   cacheWriteRate,
+  type ModelRates,
   normalizeModelId,
   ratesFor,
   tokensCost,
@@ -195,6 +196,69 @@ export function parseActivity(line: string): Activity | null {
   return null;
 }
 
+/** What a person did in a main session: typed a prompt, stopped a reply, ran /clear or /model, compacted
+ * (by hand or automatically). The record (`src/record.ts`) counts them per day. */
+export type HabitKind = "prompt" | "interrupt" | "clear" | "model" | "compact" | "autoCompact";
+
+export interface HabitLine {
+  readonly sessionId: string;
+  readonly timestamp: string; // ISO
+  readonly kind: HabitKind;
+}
+
+/** Counts of each HabitKind on one local day. */
+export type Habits = Record<HabitKind, number>;
+
+export function emptyHabits(): Habits {
+  return { prompt: 0, interrupt: 0, clear: 0, model: 0, compact: 0, autoCompact: 0 };
+}
+
+/** The text a person typed: a string, or the first text block (an image may come first). */
+function userText(content: unknown): string | null {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  for (const block of content as ReadonlyArray<Record<string, unknown> | null>) {
+    if (block?.type === "text" && typeof block.text === "string") return block.text;
+  }
+  return null;
+}
+
+/**
+ * A main-session `user` line or a `compact_boundary` system line → HabitLine; anything else → null. Not in
+ * the public docs (checked on real files 2026-11-12): a prompt is a `user` line with no `isMeta`, not a
+ * sidechain or a compact summary, whose text does not start with `<` (commands, command output, task
+ * notifications) or `[Request interrupted` (an interrupt). Tool results never parse.
+ */
+export function parseHabit(line: string): HabitLine | null {
+  const compaction = parseCompaction(line);
+  if (compaction !== null) {
+    if (compaction.timestamp === "") return null;
+    return {
+      sessionId: compaction.sessionId,
+      timestamp: compaction.timestamp,
+      kind: compaction.trigger === "manual" ? "compact" : "autoCompact",
+    };
+  }
+  if (!line.includes('"type":"user"') || line.includes('"type":"tool_result"')) return null;
+  let entry: Record<string, unknown>;
+  try {
+    entry = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const timestamp = entry.timestamp;
+  if (typeof timestamp !== "string") return null;
+  const at = { sessionId: str(entry.sessionId, "unknown"), timestamp };
+  if (entry.type !== "user" || entry.isMeta === true || entry.isSidechain === true) return null;
+  if (entry.isCompactSummary === true) return null;
+  const text = userText((entry.message as Record<string, unknown> | undefined)?.content);
+  if (text === null) return null;
+  if (text.startsWith("[Request interrupted")) return { ...at, kind: "interrupt" };
+  const command = /^<command-name>\/(clear|model)<\/command-name>/.exec(text);
+  if (command) return { ...at, kind: command[1] as HabitKind };
+  return text.startsWith("<") || text.trim() === "" ? null : { ...at, kind: "prompt" };
+}
+
 /** Tokens and $ Claude Code kept for one model over one run (`cost-state` `modelUsage`). */
 export interface CcModelUsage {
   readonly input: number;
@@ -361,6 +425,23 @@ export interface Rollup {
   usdNewWork: number;
   usdCarry: number;
   usdRewrite: number;
+  // Where the rewrite $ came from (0 in rows indexed before 2026-11-15). The parts overlap: one rewrite above
+  // 200k after a tool wait of 10 min counts in all three.
+  deepRewriteUsd: number; // the part of usdRewrite above DEEP_CONTEXT_TOKENS (compacting there avoids it)
+  toolWaitRewriteUsd: number; // usdRewrite on requests sent after a tool result, CACHE_TTL_S or more after the last
+  ttlSaveUsd: number; // what a 1h TTL would have saved: rewrites 5-60 min after the last request, as reads instead
+  oneHourExtraUsd: number; // what a 1h TTL would have added: every 5m write at the 1h rate
+}
+
+/** The default prompt-cache lifetime: a request this long after the previous one finds the cache cold. */
+export const CACHE_TTL_S = 300;
+/** The 1h lifetime. */
+const CACHE_TTL_1H_S = 3600;
+
+/** How a request followed the previous one in its thread: the wait, and whether a tool result came between. */
+export interface TurnGap {
+  readonly seconds: number;
+  readonly afterTool: boolean;
 }
 
 /** Effort levels whose thinking the coach (rule R3) counts as optional. */
@@ -394,6 +475,10 @@ export function emptyRollup(): Rollup {
     usdNewWork: 0,
     usdCarry: 0,
     usdRewrite: 0,
+    deepRewriteUsd: 0,
+    toolWaitRewriteUsd: 0,
+    ttlSaveUsd: 0,
+    oneHourExtraUsd: 0,
   };
 }
 
@@ -408,13 +493,15 @@ export function rollupUsd(rollup: Rollup): number {
 }
 
 /** Adds `turn` (priced as `cost`) into `rollup` in place. `previousContext` is the context of the thread's
- * previous turn (0 for its first); null when unknown, which skips the efficiency split. */
+ * previous turn (0 for its first); null when unknown, which skips the efficiency split. `gap` is how the turn
+ * followed the previous one (null: first turn, or unknown). Returns the rewrite $ after a tool wait. */
 export function addTurn(
   rollup: Rollup,
   turn: Turn,
   cost: TurnCost | null,
   previousContext: number | null = null,
-): void {
+  gap: TurnGap | null = null,
+): number {
   const context = contextTokens(turn);
   rollup.turns += 1;
   rollup.input += turn.input;
@@ -427,7 +514,7 @@ export function addTurn(
   rollup.maxContext = Math.max(rollup.maxContext, context);
   if (cost === null) {
     rollup.unpricedTurns += 1;
-    return;
+    return 0;
   }
   rollup.usdInput += cost.input;
   rollup.usdOutput += cost.output;
@@ -450,6 +537,35 @@ export function addTurn(
     rollup.usdCarry += split.carryUsd;
     rollup.usdRewrite += split.rewriteUsd;
   }
+  return addCacheWhatIfs(rollup, turn, cost, previousContext, gap);
+}
+
+/** The rewrite-source and 1h-TTL fields of addTurn; returns the rewrite $ after a tool wait. */
+function addCacheWhatIfs(
+  rollup: Rollup,
+  turn: Turn,
+  cost: TurnCost,
+  previousContext: number | null,
+  gap: TurnGap | null,
+): number {
+  // ponytail: rates of the turn's last request; a multi-request Haiku 5.5 turn across its tier is off a little.
+  const context = contextTokens(turn);
+  // Priced (addTurn returned early on no cost), so the rates exist.
+  const rates = ratesFor(turn.model, turn.fast, context, turn.usOnly) as ModelRates;
+  const write5m = cacheWriteRate(rates, "5m");
+  rollup.oneHourExtraUsd += tokensCost(turn.cacheWrite5m, cacheWriteRate(rates, "1h") - write5m);
+  if (previousContext === null) return 0;
+  const rewriteUsd = splitTurn(turn, cost, previousContext).rewriteUsd;
+  if (context > DEEP_CONTEXT_TOKENS) {
+    rollup.deepRewriteUsd += rewriteUsd * ((context - DEEP_CONTEXT_TOKENS) / context);
+  }
+  if (gap === null || gap.seconds < CACHE_TTL_S) return 0;
+  // Read at the cache-read rate instead of written at the 5m rate.
+  if (gap.seconds < CACHE_TTL_1H_S)
+    rollup.ttlSaveUsd += rewriteUsd * (1 - rates.cacheRead / write5m);
+  if (!gap.afterTool) return 0;
+  rollup.toolWaitRewriteUsd += rewriteUsd;
+  return rewriteUsd;
 }
 
 /** Claude Code's tool-name prefix for an MCP server: `plugin:figma:figma` → `plugin_figma_figma`. */

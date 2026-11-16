@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { box, calendarUnavailableNotice, noticeStyle, planName, visibleWidth } from "./notice.js";
+import { calendarUnavailableNotice, noticeStyle, planName } from "./notice.js";
 
 describe("notice.ts", () => {
   it("colors only on a TTY without NO_COLOR or TERM=dumb", () => {
@@ -9,20 +9,6 @@ describe("notice.ts", () => {
     expect(noticeStyle({ isTTY: true }, { NO_COLOR: "1" })).toEqual({ color: false });
     expect(noticeStyle({ isTTY: true }, { TERM: "dumb" })).toEqual({ color: false });
     expect(noticeStyle().color).toBe(false); // vitest stdout is not a TTY
-  });
-
-  it("visibleWidth ignores ANSI and counts emoji as 2", () => {
-    expect(visibleWidth("\x1b[1mab\x1b[0m")).toBe(2);
-    expect(visibleWidth("📅 x")).toBe(4);
-    expect(visibleWidth("ℹ️")).toBe(2);
-    expect(visibleWidth("a\u200db")).toBe(2);
-    expect(visibleWidth("⟨")).toBe(1);
-  });
-
-  it("box draws aligned borders", () => {
-    const lines = box({ color: false }, "T", ["a", "bbb"]).split("\n");
-    expect(lines).toEqual(["╭─ T ─╮", "│ a   │", "│ bbb │", "╰─────╯"]);
-    expect(box({ color: true }, "T", ["a"])).toContain("\x1b[");
   });
 
   it("planName maps known org types", () => {
@@ -39,11 +25,12 @@ describe("notice.ts", () => {
     expect(unknown).toContain("Plan not detected yet");
   });
 
-  it("no U+FE0F glyphs: their width differs by terminal and would bend the right border", () => {
-    for (const reason of ["subscription", "unknown"] as const) {
-      expect(calendarUnavailableNotice({ color: false }, "claude_pro", reason)).not.toContain(
-        String.fromCodePoint(0xfe0f),
-      );
-    }
+  it("no border, no title: the plan line comes first", () => {
+    const plain = calendarUnavailableNotice({ color: false }, "claude_pro", "subscription");
+    expect(plain.split("\n")[0]).toBe("👤 Your plan: Claude Pro");
+    expect(plain).not.toMatch(/[╭╮╰╯│]|cc-spend calendar/);
+    expect(calendarUnavailableNotice({ color: true }, "claude_pro", "subscription")).toContain(
+      "\x1b[",
+    );
   });
 });

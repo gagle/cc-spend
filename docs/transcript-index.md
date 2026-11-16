@@ -19,6 +19,7 @@ owner = account whose sessions-map.json has the session id, else "unattributed";
         a session several accounts know: the login at the turn's time
         (account-log.json), else the account that saw it last
         ▼
+<owner>/index/habits.json   local day → prompt, interrupt, clear, model, compact, autoCompact
 <owner>/index/YYYY-MM.json  rows: day × project × model × scope × speed → Rollup
 <owner>/index/sessions.json session → totals, first/last time, project, branch, models,
                             turnMs, thinkingMs, hookRuns, entrypoint, mcpLoaded, mcpUsed,
@@ -27,7 +28,7 @@ owner = account whose sessions-map.json has the session id, else "unattributed";
 
 - Offsets live in `~/.config/cc-spend/index/offsets.json` with the size,
   mtime, the last 64 dedupe keys and the last turn's context (`context`) per
-  file. An unchanged file is skipped; a
+  file. The offset of a transcript no longer listed (Claude Code deleted it) is dropped. An unchanged file is skipped; a
   file smaller than its offset was rewritten and is read from the start.
 - A pass starts no new file after 8 MB or 2 s (`PASS_BYTES`, `PASS_MS`); the
   rest is `bytesBehind` in `index/last-pass.json`. `catchUp` has no budget.
@@ -70,6 +71,16 @@ owner = account whose sessions-map.json has the session id, else "unattributed";
   resumed from an offset with no saved `context` skips the split for one turn;
   rows indexed before 2026-10-18 read these as 0 (`loadRollups` fills missing
   fields).
+- Cache what-ifs (`addTurn`, from the split's rewrite $; `PRICES_VERSION` `.4`
+  re-indexed them): `deepRewriteUsd` is a rewrite's share above 200k
+  (`DEEP_CONTEXT_TOKENS`); `oneHourExtraUsd` is every 5m write at the 1h − 5m
+  rate. A turn's gap is the time since the thread's previous turn (`offsets.json`
+  `at` carries it across passes). A gap of 5-60 min adds the rewrite × (1 −
+  read ÷ 5m-write rate) to `ttlSaveUsd`. A gap of 5 min or more after a
+  `tool_result` user line adds the rewrite to `toolWaitRewriteUsd` and to the
+  session's `toolWaitUsd` under the last tool called before it (`tool_use`
+  name; `offsets.json` `tool` and `afterTool` carry them across passes). The
+  rules use these in R4, R5, R11 and R13 (`docs/coach.md`).
 - MCP (`parseMcpLoad`, `mcpServersUsed`): an `mcp_instructions_delta`
   attachment gives the servers whose instructions entered context and their
   size (4 characters per token) → `mcpLoaded`; every copy of an assistant line
@@ -83,6 +94,9 @@ owner = account whose sessions-map.json has the session id, else "unattributed";
   the message, so the dedupe keeps it) adds `thinkingMs`; the first turn's
   `entrypoint` (cli, sdk-ts, …) is kept. System lines only extend a session the
   index already has. Sessions indexed before these fields read as zero.
+- Habits (`parseHabit`): in main-session files, prompts, interrupts, `/clear`,
+  `/model` and compactions add per owner and local day to `<owner>/index/habits.json`
+  (`loadHabits`); `record` reads them (`docs/record.md`).
 - Index files carry `schemaVersion` 1 and follow the downgrade guard in
   `docs/data-model.md`.
 

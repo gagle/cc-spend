@@ -41,6 +41,9 @@ const REPLACEMENTS: Readonly<Record<string, string>> = {
 const PREMIUM = /opus|fable|mythos/;
 /** R11 (antiburn check #9): fresh input this many times the context it added means context is re-sent. */
 const CHURN_MULTIPLE = 2.35;
+/** R8: the API error a request gets when a 5h or 7d limit ran out. */
+const LIMIT_ERROR = "429 usage_limit_reached";
+
 /** R12: instruction files (CLAUDE.md, MEMORY.md) past this many tokens per project are worth trimming. */
 export const LEAN_INSTRUCTION_TOKENS = 2000;
 
@@ -138,10 +141,11 @@ export const RULE_INFO: ReadonlyArray<RuleInfo> = [
   {
     id: "R4",
     title: "Prompt cache re-paid",
-    checks: "Prompt-cache misses the statusline saw, by cause.",
+    checks:
+      "Prompt-cache misses the statusline saw, by cause, and misses after a tool ran 5 min or more, by tool.",
     why: "After a miss the whole context is written again at 1.25-2x the input rate instead of read at about 0.05-0.1x.",
-    estimate: "What the misses re-paid.",
-    fix: "/compact before a break; keep the MCP servers and tools stable mid-session.",
+    estimate: "What the misses re-paid (the larger of the statusline's and the tool waits').",
+    fix: "/compact before a break; run long commands in the background; keep the MCP servers and tools stable mid-session.",
     action: "/compact before breaks",
   },
   {
@@ -149,8 +153,8 @@ export const RULE_INFO: ReadonlyArray<RuleInfo> = [
     title: "Deep context",
     checks: "Turns with more than 200k tokens of context.",
     why: "Every turn, each tool call included, re-reads the whole context; the part above 200k is paid each time.",
-    estimate: "Cache-read $ for the part above 200k.",
-    fix: "Compact earlier or start fresh for a new task (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50).",
+    estimate: "Cache-read $ for the part above 200k, plus what cache misses re-wrote of it.",
+    fix: "Auto-compact before 200k (/autocompact 200k), or start fresh for a new task.",
     action: "/compact earlier",
   },
   {
@@ -203,7 +207,7 @@ export const RULE_INFO: ReadonlyArray<RuleInfo> = [
     title: "Context sent again and again",
     checks: "Fresh input at least 2.35x the context it added.",
     why: "Context the model already had was sent again at write prices, often after a cold cache or a model switch.",
-    estimate: "The re-sent part.",
+    estimate: "The re-sent part, less what R5 counts above 200k.",
     fix: "Avoid long mid-session breaks (/compact before one); do not switch models on a big context.",
     action: "no long breaks mid-task",
   },
@@ -215,6 +219,16 @@ export const RULE_INFO: ReadonlyArray<RuleInfo> = [
     estimate: "The tokens above 2,000 re-read on each main turn.",
     fix: "Trim them; move rare detail into files read on demand.",
     action: "trim CLAUDE.md and MEMORY.md",
+  },
+  {
+    id: "R13",
+    title: "Cache expires in breaks",
+    checks: "Projects where a 1-hour prompt cache would have saved more than it costs.",
+    why: "The default cache lives 5 min; a 5-60 min break re-writes the whole context, a 1h cache would have read it.",
+    estimate:
+      "Misses after 5-60 min breaks, priced as reads, less the 2x (not 1.25x) price of every 1h write.",
+    fix: 'Set "promptCacheTtl": "1h" in the project\'s .claude/settings.json (or ~/.claude/settings.json for all).',
+    action: "1h prompt cache",
   },
 ];
 
@@ -297,37 +311,59 @@ function cacheMisses(input: CoachInput): Draft | null {
     }
   }
   const ranked = [...byCause].sort(([, a], [, b]) => b.usd - a.usd);
-  const usd = ranked.reduce((total, [, entry]) => total + entry.usd, 0);
+  const missUsd = ranked.reduce((total, [, entry]) => total + entry.usd, 0);
+  const byTool = new Map<string, number>();
+  for (const session of Object.values(input.sessions)) {
+    for (const [tool, usd] of Object.entries(session.toolWaitUsd ?? {})) {
+      byTool.set(tool, (byTool.get(tool) ?? 0) + usd);
+    }
+  }
+  const tools = [...byTool].sort(([, a], [, b]) => b - a);
+  const toolUsd = tools.reduce((total, [, usd]) => total + usd, 0);
+  // Both count the same misses from two sources (the statusline, the transcripts): the larger, never the sum.
+  const usd = Math.max(missUsd, toolUsd);
   if (usd === 0) return null;
-  const top = ranked
-    .slice(0, 3)
-    .map(([cause, entry]) => `${cause.replaceAll("_", " ")} ${money(entry.usd)}`)
-    .join(", ");
+  const top = (entries: ReadonlyArray<readonly [string, number]>): string =>
+    entries
+      .slice(0, 3)
+      .map(([name, entryUsd]) => `${name.replaceAll("_", " ")} ${money(entryUsd)}`)
+      .join(", ");
+  const parts = [
+    ...(missUsd > 0 ? [`misses: ${top(ranked.map(([cause, entry]) => [cause, entry.usd]))}`] : []),
+    ...(toolUsd > 0 ? [`after a tool ran 5+ min: ${top(tools)}`] : []),
+  ];
   return {
     id: "R4",
     usd,
-    evidence: `misses: ${top}`,
+    evidence: parts.join("; "),
     fix: {
       kind: "habit",
-      text: "/compact before a break; keep the MCP server and tool set stable mid-session",
+      text:
+        toolUsd > missUsd
+          ? "Run long commands in the background and answer permission prompts quickly; /compact before a long tool run"
+          : "/compact before a break; keep the MCP server and tool set stable mid-session",
     },
   };
 }
 
 /** R5: context past 200k tokens is re-read on every turn. */
 function deepContext(input: CoachInput): Draft | null {
-  const usd = sum(input.rows, (_, rollup) => rollup.deepContextReadUsd);
+  const read = sum(input.rows, (_, rollup) => rollup.deepContextReadUsd);
+  const rewrite = sum(input.rows, (_, rollup) => rollup.deepRewriteUsd);
+  const usd = read + rewrite;
   if (usd === 0) return null;
   const deepest = Math.max(...input.rows.map(([, rollup]) => rollup.maxContext));
   return {
     id: "R5",
     usd,
-    evidence: `re-reading context above 200k tokens (deepest ${String(Math.round(deepest / 1000))}k)`,
+    evidence: `context above 200k tokens (deepest ${String(Math.round(deepest / 1000))}k): ${money(read)} re-read${rewrite > 0 ? `, ${money(rewrite)} re-written after misses` : ""}`,
+    // Only 1M windows pass 200k (200k ones auto-compact at 167k). This window caps them at 167k too; a
+    // CLAUDE_AUTOCOMPACT_PCT_OVERRIDE of 50 would still let a 1M window grow to 490k.
     fix: {
-      kind: "env",
-      key: "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
-      value: "50",
-      text: "Compact earlier, or start fresh for a new task",
+      kind: "setting",
+      key: "autoCompactWindow",
+      value: "200000",
+      text: "Auto-compact before 200k (/autocompact 200k)",
     },
   };
 }
@@ -369,12 +405,17 @@ function runway(input: CoachInput): Draft | null {
   const budget = input.budget;
   const todayMax = budget?.todayMax ?? null;
   const overToday = budget !== undefined && todayMax !== null && budget.todaySpent > todayMax;
-  if (atRisk.length === 0 && !overToday) return null;
+  const limitHits = Object.values(input.sessions).reduce(
+    (total, session) => total + (session.apiErrors?.[LIMIT_ERROR] ?? 0),
+    0,
+  );
+  if (atRisk.length === 0 && !overToday && limitHits === 0) return null;
   const parts = atRisk.map((window) => {
     const at = input.limits?.[window]?.exhaustsAt;
     return `${window === "fiveHour" ? "5h" : "7d"} limit runs out ${at ? localWhen(new Date(at)) : "soon"}`;
   });
   if (overToday) parts.push(`today ${money(budget.todaySpent)} of ${money(todayMax)}`);
+  if (limitHits > 0) parts.push(`hit the usage limit ${String(limitHits)}× this ${input.window}`);
   return {
     id: "R8",
     usd: null,
@@ -468,7 +509,11 @@ function unusedMcp(input: CoachInput): Draft | null {
 function cacheChurn(input: CoachInput): Draft | null {
   const fresh = sum(input.rows, (_, rollup) => rollup.freshSplit);
   const rewrite = sum(input.rows, (_, rollup) => rollup.rewriteTokens);
-  const usd = sum(input.rows, (_, rollup) => rollup.usdRewrite);
+  // The part above 200k is R5's: counted once.
+  const usd = Math.max(
+    0,
+    sum(input.rows, (_, rollup) => rollup.usdRewrite - rollup.deepRewriteUsd),
+  );
   if (rewrite === 0) return null;
   const multiple = fresh - rewrite > 0 ? fresh / (fresh - rewrite) : Number.POSITIVE_INFINITY;
   if (multiple < CHURN_MULTIPLE) return null;
@@ -517,6 +562,43 @@ function instructionSize(input: CoachInput): Draft | null {
   };
 }
 
+/** R13: per project, misses after 5-60 min breaks a 1h cache would have read, less the 1h writes' extra price. */
+function cacheTtl(input: CoachInput): Draft | null {
+  const byProject = new Map<string, number>();
+  for (const [key, rollup] of input.rows) {
+    const project = parseRowKey(key).project;
+    byProject.set(
+      project,
+      (byProject.get(project) ?? 0) + rollup.ttlSaveUsd - rollup.oneHourExtraUsd,
+    );
+  }
+  const paying = [...byProject].filter(([, net]) => net > 0).sort(([, a], [, b]) => b - a);
+  if (paying.length === 0) return null;
+  const name = (project: string): string =>
+    project === ""
+      ? "(unknown)"
+      : project.slice(Math.max(project.lastIndexOf("/"), project.lastIndexOf("\\")) + 1);
+  return {
+    id: "R13",
+    usd: paying.reduce((total, [, net]) => total + net, 0),
+    evidence: `1h cache would net: ${paying
+      .slice(0, 3)
+      .map(([project, net]) => `${name(project)} ${money(net)}`)
+      .join(
+        ", ",
+      )}${byProject.size > paying.length ? ` (not in ${String(byProject.size - paying.length)} other project(s))` : ""}`,
+    fix: {
+      kind: "setting",
+      key: "promptCacheTtl",
+      value: "1h",
+      text:
+        byProject.size > paying.length
+          ? "Set a 1h prompt cache in those projects' .claude/settings.json"
+          : "Set a 1h prompt cache",
+    },
+  };
+}
+
 const RULES = [
   premiumSubagents,
   fastMode,
@@ -530,6 +612,7 @@ const RULES = [
   unusedMcp,
   cacheChurn,
   instructionSize,
+  cacheTtl,
 ];
 
 /**
@@ -550,6 +633,7 @@ export function coach(input: CoachInput): ReadonlyArray<Finding> {
         why: info.why,
         action: info.action,
         window: input.window,
+        ...weekShare(draft.usd, input),
         snoozedUntil: until && until > nowIso ? until : null,
       };
     })
@@ -558,6 +642,16 @@ export function coach(input: CoachInput): ReadonlyArray<Finding> {
         Number(a.snoozedUntil !== null) - Number(b.snoozedUntil !== null) || rank(b) - rank(a),
     )
     .slice(0, MAX_FINDINGS);
+}
+
+/**
+ * Pro/Max: the finding's $ as points of the 7-day limit per week, at the measured $ per 1%. Both are
+ * API-equivalent $; the finding's come from transcripts, so this is a floor too.
+ */
+function weekShare(usd: number | null, input: CoachInput): { weekPct?: number } {
+  const perPercent = input.limits?.usdPerPercentWeek ?? null;
+  if (usd === null || perPercent === null || perPercent <= 0) return {};
+  return { weekPct: (usd * (input.window === "week" ? 1 : 7 / 30)) / perPercent };
 }
 
 /** No $ ranks highest: R8 is about time, not money. */

@@ -6,6 +6,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -31,17 +32,9 @@ function addVersionOnly(value: Record<string, unknown>): Record<string, unknown>
 }
 export const CONFIG_MIGRATIONS: ReadonlyArray<Migration> = [addVersionOnly];
 export const API_CACHE_MIGRATIONS: ReadonlyArray<Migration> = [addVersionOnly];
-/** Layout 1 → 2: the `resets` part is new and on by default, so a saved layout gets it at the end of its
- * first row (unless a row already has it). */
-function addResetsPart(value: Record<string, unknown>): Record<string, unknown> {
-  const rows = value.rows;
-  if (!Array.isArray(rows) || rows.some((row) => Array.isArray(row) && row.includes("resets")))
-    return value;
-  const [first, ...rest] = rows as Array<unknown>;
-  const head: Array<unknown> = Array.isArray(first) ? (first as Array<unknown>) : [];
-  return { ...value, rows: [[...head, "resets"], ...rest] };
-}
-export const LAYOUT_MIGRATIONS: ReadonlyArray<Migration> = [addVersionOnly, addResetsPart];
+/** Layout 1 → 2 added the `resets` part, since removed (its data needed a Claude Code user agent). The step
+ * stays so version 2 files keep their number; an old `resets` id drops out in `parseLayout`. */
+export const LAYOUT_MIGRATIONS: ReadonlyArray<Migration> = [addVersionOnly, addVersionOnly];
 
 export const NEWER_FILE_HINT =
   "A file was written by a newer cc-spend. Run: npm i -g @gllamas/cc-spend";
@@ -157,6 +150,24 @@ export function writeFileAtomic(file: string, content: string): void {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(temp, content, { mode: 0o600 });
   renameSync(temp, file);
+}
+
+/** A temp file this old belongs to a writer that died between write and rename (Claude Code kills a
+ * statusline run when a newer one starts). Far longer than any write takes. */
+const STALE_TEMP_MS = 60_000;
+
+/** Removes `<name>.<pid>.tmp` files older than STALE_TEMP_MS in `dir`. Best effort, never throws; called off
+ * the render path (refresher). */
+export function sweepStaleTemps(dir: string, now: number = Date.now()): void {
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!/\.\d+\.tmp$/.test(name)) continue;
+      const file = path.join(dir, name);
+      if (now - statSync(file).mtimeMs >= STALE_TEMP_MS) rmSync(file, { force: true });
+    }
+  } catch {
+    // A missing dir or a file another sweep removed: nothing to do.
+  }
 }
 
 type ReadResult =
@@ -293,14 +304,18 @@ export const HISTORY_SCHEMA_VERSION = 1;
 
 /** The `key` object of a versioned history file; empty when missing or unreadable. A newer version is
  * read as empty and marked, so the save below leaves it alone. */
-function loadHistoryRecord(file: string, key: string): unknown {
+function loadHistoryObject(file: string): Record<string, unknown> | undefined {
   const result = readObjectFile(file);
   if (result.kind !== "ok") return undefined;
   if (schemaVersionOf(result.value) > HISTORY_SCHEMA_VERSION) {
     markNewerFile(file);
     return undefined;
   }
-  return result.value[key];
+  return result.value;
+}
+
+function loadHistoryRecord(file: string, key: string): unknown {
+  return loadHistoryObject(file)?.[key];
 }
 
 export function limitsFile(accountKey: string): string {
@@ -377,10 +392,19 @@ export function feedFile(accountKey: string): string {
   return path.join(accountDir(accountKey), "feed.json");
 }
 
-/** feed.json's `advice`, for the statusline's coach part; empty when missing, unreadable or newer. */
-export function loadFeedAdvice(accountKey: string): ReadonlyArray<Record<string, unknown>> {
-  const advice = loadHistoryRecord(feedFile(accountKey), "advice");
-  return Array.isArray(advice) ? (advice as ReadonlyArray<Record<string, unknown>>) : [];
+/** feed.json's `advice` and the record's note (`record.notice`), for the statusline's coach part, in one
+ * read; empty when missing, unreadable or newer. */
+export function loadFeedCoach(accountKey: string): {
+  readonly advice: ReadonlyArray<Record<string, unknown>>;
+  readonly recordNotice: string | null;
+} {
+  const feed = loadHistoryObject(feedFile(accountKey));
+  const advice = feed?.advice;
+  const notice = (feed?.record as Record<string, unknown> | null | undefined)?.notice;
+  return {
+    advice: Array.isArray(advice) ? (advice as ReadonlyArray<Record<string, unknown>>) : [],
+    recordNotice: typeof notice === "string" ? notice : null,
+  };
 }
 
 /** feed.json — written only off the render path (refresher, report, insights). */

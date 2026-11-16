@@ -317,6 +317,77 @@ describe("runIndexPass", () => {
     expect(loadSessionTotals("acct").s1).toMatchObject({ turnMs: 40_000, turns: 1 });
   });
 
+  it("counts habits per owner and local day; subagent files and bad times are skipped; a re-price keeps lost days", async () => {
+    sessionsMap("acct", ["s1"]);
+    const dir = projectDir();
+    const user = (text: string, fields: Record<string, unknown> = {}): string =>
+      `${JSON.stringify({
+        type: "user",
+        sessionId: "s1",
+        timestamp: "2026-10-07T09:00:00.000Z",
+        message: { role: "user", content: text },
+        ...fields,
+      })}\n`;
+    writeFileSync(
+      path.join(dir, "s1.jsonl"),
+      user("fix it") +
+        user("and this", { timestamp: "2026-10-06T09:00:00.000Z" }) +
+        user("<command-name>/clear</command-name>") +
+        user("bad time", { timestamp: "nope" }) +
+        `${JSON.stringify({
+          type: "system",
+          subtype: "compact_boundary",
+          sessionId: "s1",
+          timestamp: "2026-10-07T09:30:00.000Z",
+          compactMetadata: { trigger: "auto" },
+        })}\n` +
+        line("a"),
+    );
+    const agents = path.join(dir, "s1", "subagents");
+    mkdirSync(agents, { recursive: true });
+    writeFileSync(path.join(agents, "agent-1.jsonl"), user("task for the agent"));
+    const { runIndexPass, loadHabits, INDEX_DIR, ownerIndexDir } = await fresh();
+    runIndexPass({ now: NOW });
+    expect(loadHabits("acct")).toEqual({
+      "2026-10-06": { prompt: 1, interrupt: 0, clear: 0, model: 0, compact: 0, autoCompact: 0 },
+      "2026-10-07": { prompt: 1, interrupt: 0, clear: 1, model: 0, compact: 0, autoCompact: 1 },
+    });
+    appendFileSync(path.join(dir, "s1.jsonl"), user("again"));
+    runIndexPass({ now: NOW });
+    expect(loadHabits("acct")["2026-10-07"]?.prompt).toBe(2);
+    expect(loadHabits("nobody")).toEqual({});
+
+    // A rebuild with s1's transcript gone keeps its days from the backup.
+    const habitsFile = path.join(ownerIndexDir("acct"), "habits.json");
+    writeFileSync(
+      habitsFile,
+      JSON.stringify({ schemaVersion: 1, days: { "2026-10-01": { prompt: 5 } } }),
+    );
+    writeFileSync(
+      path.join(INDEX_DIR, "prices.json"),
+      JSON.stringify({ schemaVersion: 1, prices: { version: "2026-01-01" } }),
+    );
+    rmSync(path.join(dir, "s1.jsonl"));
+    writeFileSync(path.join(dir, "s2.jsonl"), line("b", { sessionId: "s2" }));
+    expect(runIndexPass({ now: NOW })?.repriced).toBeDefined();
+    expect(loadHabits("acct")["2026-10-01"]).toMatchObject({ prompt: 5, clear: 0 });
+  });
+
+  it("a re-price with no habits in the backup writes none", async () => {
+    sessionsMap("acct", ["s1"]);
+    const dir = projectDir();
+    writeFileSync(path.join(dir, "s1.jsonl"), line("a"));
+    const { runIndexPass, ownerIndexDir, INDEX_DIR } = await fresh();
+    runIndexPass({ now: NOW });
+    writeFileSync(
+      path.join(INDEX_DIR, "prices.json"),
+      JSON.stringify({ schemaVersion: 1, prices: { version: "2026-01-01" } }),
+    );
+    appendFileSync(path.join(dir, "s1.jsonl"), line("b"));
+    runIndexPass({ now: NOW });
+    expect(existsSync(path.join(ownerIndexDir("acct"), "habits.json"))).toBe(false);
+  });
+
   it("keeps Claude Code's own cost per run: the larger reading of a run wins, across passes", async () => {
     sessionsMap("acct", ["s1"]);
     const file = path.join(projectDir(), "s1.jsonl");
@@ -411,6 +482,38 @@ describe("runIndexPass", () => {
     });
   });
 
+  it("a miss after a 5+ min tool run is charged to the tool whose result it waited for", async () => {
+    sessionsMap("acct", ["s1"]);
+    const turn = (id: string, hhmm: string, write: number, tool?: string): string =>
+      line(id, {
+        timestamp: `2026-10-07T${hhmm}:00.000Z`,
+        message: {
+          id: `m-${id}`,
+          model: "claude-opus-5-5",
+          usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: write },
+          content: tool ? [{ type: "tool_use", id: `tu-${id}`, name: tool }] : [],
+        },
+      });
+    const result = `${JSON.stringify({
+      type: "user",
+      sessionId: "s1",
+      message: { content: [{ type: "tool_result", tool_use_id: "tu-a" }] },
+    })}\n`;
+    const main = path.join(projectDir(), "s1.jsonl");
+    writeFileSync(main, turn("a", "10:00", 50_000, "Bash") + result);
+    const { runIndexPass, loadSessionTotals, loadRollups } = await fresh();
+    runIndexPass({ now: NOW });
+    // Next pass resumes from the saved time of the last turn: 10 min later, everything written again.
+    appendFileSync(main, turn("b", "10:10", 60_000, "Read"));
+    runIndexPass({ now: NOW });
+    const waits = loadSessionTotals("acct").s1?.toolWaitUsd ?? {};
+    expect(Object.keys(waits)).toEqual(["Bash"]);
+    const [rollup] = loadRollups("acct", ["2026-10"]).values();
+    expect(waits.Bash).toBeCloseTo(rollup?.toolWaitRewriteUsd ?? 0, 9);
+    expect(waits.Bash).toBeGreaterThan(0);
+    expect(rollup?.ttlSaveUsd).toBeGreaterThan(0);
+  });
+
   it("rows indexed before a rollup field existed read it as 0", async () => {
     const { loadRollups, ownerIndexDir } = await fresh();
     mkdirSync(ownerIndexDir("acct"), { recursive: true });
@@ -475,6 +578,20 @@ describe("runIndexPass", () => {
     expect(runIndexPass({ now: NOW })).toBeNull();
   });
 
+  it("drops the offset of a transcript Claude Code deleted", async () => {
+    const dir = projectDir();
+    writeFileSync(path.join(dir, "s1.jsonl"), line("a"));
+    writeFileSync(path.join(dir, "s2.jsonl"), line("b", { sessionId: "s2" }));
+    const { runIndexPass, INDEX_DIR } = await fresh();
+    runIndexPass({ now: NOW });
+    rmSync(path.join(dir, "s2.jsonl"));
+    runIndexPass({ now: NOW });
+    const offsets = JSON.parse(readFileSync(path.join(INDEX_DIR, "offsets.json"), "utf8")) as {
+      files: Record<string, unknown>;
+    };
+    expect(Object.keys(offsets.files)).toEqual([path.join(dir, "s1.jsonl")]);
+  });
+
   it("a price change re-prices the index from transcripts; rows of deleted transcripts are kept", async () => {
     const dir = projectDir();
     const other = path.join(fakeHome, ".claude", "projects", "-work-other");
@@ -503,6 +620,7 @@ describe("runIndexPass", () => {
     );
     rmSync(path.join(dir, "s2.jsonl"));
     rmSync(path.join(other, "s3.jsonl"));
+    mkdirSync(path.join(INDEX_DIR, "backup-prices-2025-01-01")); // an older re-price's backup
 
     expect(runIndexPass({ now: NOW })?.repriced).toEqual({
       from: "2026-01-01",
@@ -520,6 +638,11 @@ describe("runIndexPass", () => {
     expect(
       existsSync(path.join(INDEX_DIR, "backup-prices-2026-01-01", UNATTRIBUTED, "2026-10.json")),
     ).toBe(true);
+    expect(existsSync(path.join(INDEX_DIR, "backup-prices-2025-01-01"))).toBe(false); // superseded
+    const offsets = JSON.parse(readFileSync(path.join(INDEX_DIR, "offsets.json"), "utf8")) as {
+      files: Record<string, unknown>;
+    };
+    expect(Object.keys(offsets.files)).toEqual([path.join(dir, "s1.jsonl")]); // gone transcripts pruned
     expect(runIndexPass({ now: NOW })?.repriced).toBeUndefined(); // once
 
     // A newer build's prices are never re-priced down; an index with no prices file is ("none").

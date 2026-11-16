@@ -13,6 +13,7 @@ Types live in `src/interfaces/config.interface.ts` and
   accounts/<accountKey>/limits.json      { schemaVersion 1, samples: LimitSample[] } — render, on a % change
   accounts/<accountKey>/sessions-map.json { schemaVersion 1, sessions } — render, new session or hourly
   accounts/<accountKey>/feed.json        Feed for the /cost-tracker mod — written ONLY by the refresher
+  accounts/<accountKey>/records.json     { schemaVersion 1, records: RecordsFile } — refresher and `record`
   accounts/<accountKey>/refresh.lock     present while a refresher runs (stale after 30 s)
   accounts/<accountKey>/*.corrupt-<ms>   copy of a corrupt file, kept before re-seeding
   profiles.json                          token-hash → Account, for CLAUDE_CODE_OAUTH_TOKEN users
@@ -25,7 +26,8 @@ Types live in `src/interfaces/config.interface.ts` and
 
 Before the rename to cc-spend the root was `~/.config/cc-daily-usage/`; `moveLegacyRootDir` moves it once.
 
-All writes are atomic (temp + rename, mode `0o600`). Missing files are seeded,
+All writes are atomic (temp `<file>.<pid>.tmp` + rename, mode `0o600`). A temp left by a writer killed
+before the rename is removed by the refresher once it is a minute old (`sweepStaleTemps`). Missing files are seeded,
 corrupt ones quarantined then re-seeded — nothing on this path throws.
 
 ## File versions (`src/migrate.ts`)
@@ -33,14 +35,15 @@ corrupt ones quarantined then re-seeded — nothing on this path throws.
 Each file has its own `schemaVersion`, never tied to the npm or plugin version.
 A missing version is 0 (the format before versioning).
 
-| File                                            | Version                    | Migration                                                                                        |
-| ----------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------ |
-| `config.json`                                   | 1 (`CONFIG_MIGRATIONS`)    | on load: backup, then rewrite with the version; unknown fields kept                              |
-| `usage.json`                                    | 2 (`USAGE_SCHEMA_VERSION`) | `upgradeUsage` on load; backup when below 2                                                      |
-| `api-cache.json`                                | 1 (`API_CACHE_MIGRATIONS`) | none: a cache; the next refresh writes the version                                               |
-| `statusline.json`                               | 2 (`LAYOUT_MIGRATIONS`)    | in memory on render (2 adds `resets` to the first row's end); the next `settings` save writes it |
-| `limits.json`, `sessions-map.json`, `feed.json` | 1                          | new files, versioned from the start                                                              |
-| `account-log.json`                              | 1                          | new file, versioned from the start                                                               |
+| File                                            | Version                    | Migration                                                                                            |
+| ----------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `config.json`                                   | 1 (`CONFIG_MIGRATIONS`)    | on load: backup, then rewrite with the version; unknown fields kept                                  |
+| `usage.json`                                    | 2 (`USAGE_SCHEMA_VERSION`) | `upgradeUsage` on load; backup when below 2                                                          |
+| `api-cache.json`                                | 1 (`API_CACHE_MIGRATIONS`) | none: a cache; the next refresh writes the version                                                   |
+| `statusline.json`                               | 2 (`LAYOUT_MIGRATIONS`)    | in memory on render (2 is version-only; a `resets` id drops out); the next `settings` save writes it |
+| `limits.json`, `sessions-map.json`, `feed.json` | 1                          | new files, versioned from the start                                                                  |
+| `account-log.json`                              | 1                          | new file, versioned from the start                                                                   |
+| `records.json`                                  | 1                          | new file, versioned from the start                                                                   |
 
 - Backup: `<file>.bak-<ISO with - for :>-<pid>` next to the file; the newest 3
   are kept (`backupFile`).
@@ -98,27 +101,33 @@ It keeps 35 days of switches plus the newest older one.
 - A history file that is missing, garbled or of a newer version reads as empty.
 - Transcript index files (`docs/transcript-index.md`) add fields without a
   version bump: rollups `growth`, `freshSplit`, `rewriteTokens`, `usdNewWork`,
-  `usdCarry`, `usdRewrite` (missing → 0 on load); `offsets.json` per file
-  `context`; `sessions.json` per session `mcpLoaded`, `mcpUsed`,
-  `attributedUsd`, `apiErrors`, `ccRuns` (`{ <startTime>: { usd, models } }`,
+  `usdCarry`, `usdRewrite`, `deepRewriteUsd`, `toolWaitRewriteUsd`,
+  `ttlSaveUsd`, `oneHourExtraUsd` (missing → 0 on load); `offsets.json` per file
+  `context`, `at`, `tool`, `afterTool`; `sessions.json` per session `mcpLoaded`, `mcpUsed`,
+  `attributedUsd`, `apiErrors`, `toolWaitUsd`, `ccRuns` (`{ <startTime>: { usd, models } }`,
   Claude Code's own cost per run) (missing → none). `index/prices.json` holds the
   `PRICES_VERSION` the index was priced at; `index/backup-prices-<version>/`
-  is the copy taken before a re-price.
+  is the copy taken before a re-price; a finished re-price removes every older one.
+  `index/habits.json` (per owner): `{ schemaVersion 1, days: { <local day>: Habits } }`, the
+  counts `prompt`, `interrupt`, `clear`, `model`, `compact`, `autoCompact` (missing → 0).
+- `RecordsFile` (`src/record.ts`): `{ days, baseline: Snapshot | null, current: RecordEntry | null,
+closed: RecordEntry[] (newest 52), unseen: number | null }`; `RecordEntry` is
+  `{ n, from, to, focus, focusShare, snapshot? }` (`snapshot` once closed). Missing, garbled or
+  newer reads as empty; see `docs/record.md`.
 - `Feed`: the shared contract with the `/cost-tracker` mod, see `docs/history-and-feed.md`.
 
 ## `ApiCache`
 
-`{ fetchedAt, extraUsage, fiveHour, sevenDay, stale?, readAt?, failures?, lastError?, retryAt?, extraWindows?, claudeCodeShare?, plan?, resets? }`.
+`{ fetchedAt, extraUsage, fiveHour, sevenDay, stale?, readAt?, failures?, lastError?, retryAt?, extraWindows?, claudeCodeShare?, plan?, claudeCodeLatest? }`.
 `extraUsage` holds the usage-credits ledger in dollars (`decimal_places`
 applied); windows are `{ pct 0-100, resetsAt epoch s, usedDollars?, limitDollars?, severity? }`
 (`severity` from the response's `limits[]`: `session` → 5h, `weekly_all` →
 7d). `extraWindows` are the other `seven_day_<key>` windows with a reading
 (`{ key, ...window }`). `claudeCodeShare` (0-1) is Claude Code's row of
-`seven_day_breakdown`. `resets` are the limit-reset grants with a reset
-left and not paused (`{ left, endsAt epoch ms | null }`), read from the
-undocumented `cedar_ember` block that the fetch asks for with
-`?cedar_ember=1`; empty when the account is not eligible. `plan` is `{ fetchedAt, rateLimitTier, subscriptionStatus, billingType, trialEndsAt }`
-from `/api/oauth/profile`, re-read daily. A failed fetch keeps the previous
+`seven_day_breakdown`. Every fetch sends `User-Agent: cc-spend/<version> (+https://github.com/gagle/cc-spend)`.
+A `resets` field in an older file is ignored. `plan` is `{ fetchedAt, rateLimitTier, subscriptionStatus, billingType, trialEndsAt }`
+from `/api/oauth/profile`, re-read daily. `claudeCodeLatest` is `{ version, fetchedAt }`, npm's `latest` of
+`@anthropic-ai/claude-code`, re-read every 6 h (`src/claude-code-version.ts`); a failed read keeps the old one. A failed fetch keeps the previous
 reading with `stale: true`, its time in `readAt` (so the runway survives the
 failure), counts `failures`, and keeps why in `lastError` (`HTTP 429`,
 `network`, `bad response`, `no token`; `doctor` shows it); a good one clears

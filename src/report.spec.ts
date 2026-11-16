@@ -488,7 +488,11 @@ describe("buildReport / formatReport", () => {
       webSearches: 0,
       usd: 6,
     };
-    const session = (models: Record<string, typeof usage>, lastAt = NOW.toISOString()) => ({
+    const session = (
+      models: Record<string, typeof usage>,
+      lastAt = NOW.toISOString(),
+      start = "1",
+    ) => ({
       firstAt: "",
       lastAt,
       project: "",
@@ -498,14 +502,24 @@ describe("buildReport / formatReport", () => {
       usd: 6,
       unpricedTurns: 0,
       subagentUsd: 0,
-      ccRuns: { "1": { usd: 6, models } },
+      ccRuns: { [start]: { usd: 6, models } },
     });
     expect(selfCheck({ a: session({ "claude-opus-5-5": usage }) }, week)).toEqual([]);
+    // The newest run per model decides: an older Claude Code's price gap is history.
     expect(
       selfCheck(
         {
-          a: session({ "claude-opus-5-5": { ...usage, usd: 7.5 } }),
-          b: session({ "claude-opus-5-5": { ...usage, usd: 6.5 } }),
+          old: session({ "claude-opus-5-5": { ...usage, usd: 9 } }, undefined, "1"),
+          now: session({ "claude-opus-5-5": usage }, undefined, "2"),
+        },
+        week,
+      ),
+    ).toEqual([]);
+    expect(
+      selfCheck(
+        {
+          a: session({ "claude-opus-5-5": { ...usage, usd: 7.5 } }, undefined, "3"),
+          b: session({ "claude-opus-5-5": { ...usage, usd: 6.5 } }, undefined, "2"),
           c: session({ "claude-sonnet-5-5": { ...usage, usd: 2 } }),
         },
         week,

@@ -19,7 +19,6 @@ export const PARTS = [
   { id: "today", label: "Today's budget (Team)", sample: "$4.10/$9.50 (43%)" },
   { id: "month", label: "Month's budget (Team)", sample: "$120.00/$200.00 (60%)" },
   { id: "spend", label: "Spend limit", sample: "💳 40%" },
-  { id: "resets", label: "Limit resets left (Pro/Max)", sample: "↺ 1 reset · by Nov 17" },
   {
     id: "coach",
     label: "Next action",

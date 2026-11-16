@@ -7,7 +7,6 @@ import type {
   ApiCache,
   ApiExtraWindow,
   ApiPlan,
-  ApiResetGrant,
   ApiWindow,
 } from "./interfaces/config.interface.js";
 import { CLAUDE_DIR } from "./statusline-shared.js";
@@ -17,10 +16,20 @@ const OAUTH_BETA_HEADER = "oauth-2025-04-20";
 const KEYCHAIN_SERVICE_NAME = "Claude Code-credentials";
 const CREDENTIALS_FILE = path.join(CLAUDE_DIR, ".credentials.json");
 const FETCH_TIMEOUT_MS = 5000;
-/** The server sends the limit-reset grants (`cedar_ember`) only to a Claude Code client ("surface"): with
- * any other user agent it answers `ineligible_reason: "surface"`. The suffix names this tool.
- * # ponytail: undocumented gate, may change without notice; the part then hides (no grants). */
-const RESETS_USER_AGENT = "claude-cli/2.1.319 (external, cli) cc-spend";
+const HOMEPAGE = "https://github.com/gagle/cc-spend";
+
+/** `cc-spend/<version> (+<homepage>)` on every request: this tool names itself, never Claude Code's client. */
+export function userAgent(packageJson: URL = new URL("../package.json", import.meta.url)): string {
+  try {
+    const pkg = JSON.parse(readFileSync(packageJson, "utf8")) as {
+      version?: unknown;
+    };
+    const version = typeof pkg.version === "string" ? pkg.version : "unknown";
+    return `cc-spend/${version} (+${HOMEPAGE})`;
+  } catch {
+    return `cc-spend/unknown (+${HOMEPAGE})`;
+  }
+}
 
 export interface ResolvedToken {
   readonly token: string;
@@ -144,15 +153,6 @@ interface RawUsageResponse {
     readonly spend_limit_reached?: boolean | null;
     readonly disabled_reason?: string | null;
   } | null;
-  // Limit-reset grants: only sent with `?cedar_ember=1` (Claude Code's own `/usage` read; not documented).
-  readonly cedar_ember?: {
-    readonly eligible?: boolean;
-    readonly grants?: ReadonlyArray<{
-      readonly resets_left?: number;
-      readonly ends_at?: string | null;
-      readonly paused?: boolean;
-    }> | null;
-  } | null;
 }
 
 /** Why a fetch gave no reading: `error` is shown by `doctor`; `retryAfter` is the server's raw header. */
@@ -163,18 +163,14 @@ export interface FetchFailure {
 
 type FetchOutcome<T> = { readonly data: T } | { readonly failure: FetchFailure };
 
-async function fetchJsonOutcome<T>(
-  url: string,
-  token: string,
-  extraHeaders: Readonly<Record<string, string>> = {},
-): Promise<FetchOutcome<T>> {
+async function fetchJsonOutcome<T>(url: string, token: string): Promise<FetchOutcome<T>> {
   try {
     const response = await fetch(url, {
       headers: {
         Authorization: `Bearer ${token}`,
         "anthropic-beta": OAUTH_BETA_HEADER,
         "Content-Type": "application/json",
-        ...extraHeaders,
+        "User-Agent": userAgent(),
       },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
@@ -258,20 +254,6 @@ function parseClaudeCodeShare(raw: RawUsageResponse): number | null {
   return typeof percent === "number" ? Math.min(1, Math.max(0, percent / 100)) : null;
 }
 
-/** Grants with a reset left and not paused; none when the account is not eligible. */
-function parseResets(raw: RawUsageResponse): Array<ApiResetGrant> {
-  const block = raw.cedar_ember;
-  if (block?.eligible !== true) return [];
-  const grants: Array<ApiResetGrant> = [];
-  for (const grant of block.grants ?? []) {
-    const left = grant.resets_left;
-    if (typeof left !== "number" || left <= 0 || grant.paused === true) continue;
-    const endsMs = grant.ends_at ? Date.parse(grant.ends_at) : Number.NaN;
-    grants.push({ left, endsAt: Number.isNaN(endsMs) ? null : endsMs });
-  }
-  return grants;
-}
-
 export type UsageReading = Omit<ApiCache, "fetchedAt" | "stale">;
 export type UsageOutcome = { readonly usage: UsageReading } | { readonly failure: FetchFailure };
 
@@ -279,11 +261,7 @@ export type UsageOutcome = { readonly usage: UsageReading } | { readonly failure
  * tokens). A failure says why. `extra_usage` is Anthropic's server-side "Usage credits" ledger;
  * `five_hour`/`seven_day` are the seat windows Claude Code only learns from a model response. */
 export async function fetchUsageOutcome(token: string): Promise<UsageOutcome> {
-  const outcome = await fetchJsonOutcome<unknown>(
-    `${BASE_API_URL}/api/oauth/usage?cedar_ember=1`,
-    token,
-    { "User-Agent": RESETS_USER_AGENT },
-  );
+  const outcome = await fetchJsonOutcome<unknown>(`${BASE_API_URL}/api/oauth/usage`, token);
   if ("failure" in outcome) return outcome;
   if (outcome.data === null || typeof outcome.data !== "object") {
     return { failure: { error: "bad response", retryAfter: null } };
@@ -296,7 +274,6 @@ export async function fetchUsageOutcome(token: string): Promise<UsageOutcome> {
       sevenDay: parseWindow(raw.seven_day, severityOf(raw, "weekly_all")),
       extraWindows: parseExtraWindows(raw),
       claudeCodeShare: parseClaudeCodeShare(raw),
-      resets: parseResets(raw),
     },
   };
 }
@@ -358,7 +335,9 @@ export function nextApiCache(
   now: Date,
 ): ApiCache {
   const plan = previous?.plan === undefined ? {} : { plan: previous.plan };
-  if ("usage" in outcome) return { fetchedAt: now.getTime(), ...plan, ...outcome.usage };
+  const latest =
+    previous?.claudeCodeLatest === undefined ? {} : { claudeCodeLatest: previous.claudeCodeLatest };
+  if ("usage" in outcome) return { fetchedAt: now.getTime(), ...plan, ...latest, ...outcome.usage };
   return {
     extraUsage: null,
     fiveHour: null,
