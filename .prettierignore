@@ -4,3 +4,6 @@ node_modules
 pnpm-lock.yaml
 docs/claude-code-upstream
 .code-review-graph
+# release-please writes these; its format wins
+CHANGELOG.md
+.release-please-manifest.json
