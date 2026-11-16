@@ -200,6 +200,10 @@ function trackLimits(
 
 /** The first non-snoozed finding of feed.json (written by the refresher), or null. R8 (a limit running out)
  * is skipped: the `warnings` part already shows it, and the next action covers what to do. */
+/** A finding's $/week must grow this much since the last record to show as rising (record.ts MIN_MOVE_USD;
+ * not imported: the render path stays off record.js). */
+const MIN_RISE_USD = 0.5;
+
 function coachTip(key: string): StatuslineState["coach"] {
   const { advice, recordNotice } = loadFeedCoach(key);
   // A record that closed unseen comes first: one look at `cc-spend record` clears it.
@@ -214,6 +218,7 @@ function coachTip(key: string): StatuslineState["coach"] {
     action: typeof top.action === "string" ? top.action : null,
     usd: typeof top.usd === "number" ? top.usd : null,
     window: typeof top.window === "string" ? top.window : "week",
+    rising: typeof top.trendUsdPerWeek === "number" && top.trendUsdPerWeek >= MIN_RISE_USD,
   };
 }
 

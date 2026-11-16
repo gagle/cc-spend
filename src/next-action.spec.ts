@@ -156,5 +156,13 @@ describe("nextAction", () => {
         state({ coach: { title: "Older model", action: null, usd: null, window: "week" } }),
       ),
     ).toBe("Older model");
+    expect(
+      text(
+        payload(),
+        state({
+          coach: { title: "Fast mode", action: "/fast off", usd: 3, window: "week", rising: true },
+        }),
+      ),
+    ).toBe("/fast off · ~$3.00/week · ▲ up on last week");
   });
 });

@@ -2,9 +2,9 @@ import path from "node:path";
 
 import { localDateKey } from "./clock.js";
 import { loadSessionsMap } from "./config.js";
-import { paint, type Segment, stacked } from "./meter.js";
+import { paint, type Segment, sparkline, stacked } from "./meter.js";
 import { cacheWriteRate, hasPromptTiers, ratesFor, tokensCost, WEB_SEARCH_USD } from "./pricing.js";
-import { mtokBand } from "./session-model.js";
+import { shortDay } from "./record.js";
 import {
   loadRollups,
   loadSessionTotals,
@@ -30,6 +30,14 @@ export interface DayRange {
   readonly from: string;
   readonly to: string;
 }
+
+/** `day` + `n` local days, as YYYY-MM-DD. */
+function shiftDay(day: string, n: number): string {
+  const [y, m, d] = day.split("-").map(Number) as [number, number, number];
+  return localDateKey(new Date(y, m - 1, d + n));
+}
+
+const nextDay = (day: string): string => shiftDay(day, 1);
 
 function daysBack(now: Date, back: number): string {
   return localDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - back));
@@ -84,6 +92,8 @@ export interface Report {
   readonly gaps: ReadonlyArray<string>; // self-check notes
   readonly activity: ReportActivity;
   readonly claudeCode: ClaudeCodeTotals | null; // Claude Code's own $ for the sessions it fully counted
+  readonly daily: ReadonlyArray<readonly [string, number]>; // each local day of the range up to today, $
+  readonly previousUsd: number; // $ of the same number of days just before the range
 }
 
 /** Sessions in range whose every run left a `cost-state` line: Claude Code's $ next to the transcripts' $. */
@@ -237,6 +247,7 @@ export function buildReport(
   range: DayRange,
   by: Dimension,
   usdPerPercentWeek: number | null = null,
+  now: Date = new Date(),
 ): Report {
   const entries = rowsInRange(owner, range);
   const total = emptyRollup();
@@ -276,6 +287,28 @@ export function buildReport(
     owner === UNATTRIBUTED
       ? 0
       : rowsInRange(UNATTRIBUTED, range).reduce((sum, [, rollup]) => sum + rollupUsd(rollup), 0);
+  const days = new Map<string, number>();
+  for (const [key, rollup] of entries) {
+    const { day } = parseRowKey(key);
+    days.set(day, (days.get(day) ?? 0) + rollupUsd(rollup));
+  }
+  const today = localDateKey(now);
+  const daily: Array<readonly [string, number]> = [];
+  // `YYYY-MM` ranges end on day 31; string order stops at the month's real last day (Sep 30 → Oct 1 > Sep 31).
+  for (let day = range.from; day <= range.to && day <= today; day = nextDay(day)) {
+    daily.push([day, days.get(day) ?? 0]);
+  }
+
+  const length = Math.max(1, daily.length);
+  const previous = {
+    label: "previous",
+    from: shiftDay(range.from, -length),
+    to: shiftDay(range.from, -1),
+  };
+  const previousUsd = rowsInRange(owner, previous).reduce(
+    (sum, [, rollup]) => sum + rollupUsd(rollup),
+    0,
+  );
   return {
     owner,
     range,
@@ -287,6 +320,8 @@ export function buildReport(
     gaps: owner === UNATTRIBUTED ? [] : selfCheck(totals, range),
     activity: activityOf(inRange.map(([, session]) => session)),
     claudeCode: claudeCodeTotals(inRange.map(([, session]) => session)),
+    daily,
+    previousUsd,
   };
 }
 
@@ -336,7 +371,8 @@ export function hasUnpricedTurns(owner: string, now: Date): boolean {
   return rowsInRange(owner, range).some(([, rollup]) => rollup.unpricedTurns > 0);
 }
 
-const money = (usd: number): string => `$${usd.toFixed(2)}`;
+/** Whole $ from $10 up: cents there are noise on an estimate. */
+const money = (usd: number): string => (usd >= 10 ? `$${usd.toFixed(0)}` : `$${usd.toFixed(2)}`);
 
 /** `3h12m` / `40m` / `<1m`. */
 function hoursMinutes(ms: number): string {
@@ -346,176 +382,172 @@ function hoursMinutes(ms: number): string {
   return hours === 0 ? `${String(minutes)}m` : `${String(hours)}h${String(minutes % 60)}m`;
 }
 
-/** `Turn time 3h12m (thinking 40m) · 123 hook runs · started from cli 12, sdk-ts 2`, or null when empty. */
-function activityNote(activity: ReportActivity): string | null {
-  const parts: Array<string> = [];
-  if (activity.turnMs > 0 || activity.thinkingMs > 0) {
-    parts.push(
-      `Turn time ${hoursMinutes(activity.turnMs)} (thinking ${hoursMinutes(activity.thinkingMs)})`,
-    );
-  }
-  if (activity.hookRuns > 0) parts.push(`${String(activity.hookRuns)} hook runs`);
-  const starts = Object.entries(activity.entrypoints).sort(([, a], [, b]) => b - a);
-  if (starts.length > 0) {
-    parts.push(
-      `started from ${starts.map(([name, count]) => `${name} ${String(count)}`).join(", ")}`,
-    );
-  }
-  return parts.length === 0 ? null : parts.join(" · ");
-}
-
-/** `Attributed: skill claude-api $12.40 · mcp tokensave $3.10 · …` (top 5), or null when nothing is. */
-function attributionNote(activity: ReportActivity): string | null {
-  const top = Object.entries(activity.attributedUsd)
-    .filter(([, usd]) => usd >= 0.01)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 5);
-  if (top.length === 0) return null;
-  const items = top.map(([name, usd]) => `${name.replace(":", " ")} ${money(usd)}`);
-  return `Attributed by Claude Code: ${items.join(" · ")}`;
-}
-
-/** `API errors 11: 429 usage_limit_reached ×8, 529 ×3`, or null with none. */
-function apiErrorNote(activity: ReportActivity): string | null {
-  const kinds = Object.entries(activity.apiErrors).sort(([, a], [, b]) => b - a);
-  if (kinds.length === 0) return null;
-  const total = kinds.reduce((sum, [, count]) => sum + count, 0);
-  return `API errors ${String(total)}: ${kinds.map(([kind, count]) => `${kind} ×${String(count)}`).join(", ")}`;
-}
-
-/** `Efficiency: new work 44% · carry 41% · rewrite 15% · $9/MTok of new work (good)`, or null before any
- * turn with the split (rows indexed before 2026-10-18 have none). */
-function efficiencyNote(total: Rollup): string | null {
-  const base = total.usdNewWork + total.usdCarry + total.usdRewrite;
-  if (base <= 0) return null;
-  const share = (usd: number): string => `${String(Math.round((usd / base) * 100))}%`;
-  const perMTok = total.growth > 0 ? (base / total.growth) * 1_000_000 : null;
-  const mtok =
-    perMTok === null ? "" : ` · $${perMTok.toFixed(0)}/MTok of new work (${mtokBand(perMTok)})`;
-  return `Efficiency: new work ${share(total.usdNewWork)} · carry ${share(total.usdCarry)} · rewrite ${share(total.usdRewrite)}${mtok}`;
-}
-
-/** The report as a terminal table. */
-const CHART: ReadonlyArray<{
+/** The three things a $ pays for (`Rollup` split, rows indexed from 2026-10-18), plus what the split misses. */
+const PARTS: ReadonlyArray<{
   readonly rgb: string;
-  readonly glyph: string;
+  readonly glyph: string; // without color, so the parts stay apart
   readonly label: string;
   readonly usd: (r: Rollup) => number;
 }> = [
-  { rgb: "99;150;230", glyph: "i", label: "input", usd: (r) => r.usdInput },
-  { rgb: "200;120;220", glyph: "o", label: "output", usd: (r) => r.usdOutput },
-  { rgb: "120;200;160", glyph: "r", label: "cache read", usd: (r) => r.usdCacheRead },
-  { rgb: "240;180;80", glyph: "w", label: "cache write", usd: (r) => r.usdCacheWrite },
+  { rgb: "80;200;120", glyph: "█", label: "new work", usd: (r) => r.usdNewWork },
+  { rgb: "240;180;80", glyph: "▓", label: "history re-reads", usd: (r) => r.usdCarry },
+  { rgb: "230;110;110", glyph: "▒", label: "cache rebuilds", usd: (r) => r.usdRewrite },
   {
-    rgb: "230;110;110",
-    glyph: "s",
-    label: "web search",
-    usd: (r) => r.webSearches * WEB_SEARCH_USD,
+    rgb: "110;110;110",
+    glyph: "░",
+    label: "other",
+    usd: (r) => Math.max(0, rollupUsd(r) - r.usdNewWork - r.usdCarry - r.usdRewrite),
   },
 ];
-const CHART_CELLS = 30;
+const ROW_CELLS = 30;
+const SPLIT_CELLS = 48;
 
 export interface FormatOptions {
-  readonly chart: boolean; // a stacked bar per row, scaled to the largest row
   readonly color: boolean;
 }
 
-const pctText = (value: number | null | undefined): string =>
-  value == null ? "—" : `≈${value.toFixed(1)}%`;
+const pctOf = (part: number, whole: number): string =>
+  `${String(whole > 0 ? Math.round((part / whole) * 100) : 0)}%`;
 
-export function formatReport(
-  report: Report,
-  options: FormatOptions = { chart: false, color: false },
-): string {
-  const sessions = report.by === "session";
-  const header = ["", "input", "output", "cache read", "cache write", "total"];
-  if (sessions) header.push("% of week", "$/100 lines");
-  const cells = (label: string, r: Rollup, row?: ReportRow): ReadonlyArray<string> => {
-    // The index keeps only a session's total, so its parts show as —.
-    const part = (usd: number): string => (sessions && row ? "—" : money(usd));
-    const out = [
-      label,
-      part(r.usdInput),
-      part(r.usdOutput),
-      part(r.usdCacheRead),
-      part(r.usdCacheWrite),
-      money(rollupUsd(r)),
-    ];
-    if (sessions) {
-      out.push(
-        row ? pctText(row.weekPct) : "",
-        row?.usdPer100Lines == null ? (row ? "—" : "") : money(row.usdPer100Lines),
-      );
-    }
-    return out;
-  };
-  // A chart by day reads left to right in time; every other view ranks by $.
-  const rows =
-    options.chart && report.by === "day"
-      ? [...report.rows].sort((a, b) => a.label.localeCompare(b.label))
-      : report.rows;
-  const body = [
-    header,
-    ...rows.map((row) => cells(row.label, row.rollup, row)),
-    cells("total", report.total),
-  ];
-  const widths = header.map((_, column) =>
-    Math.max(...body.map((row) => (row[column] as string).length)),
-  );
-  const largest = Math.max(0, ...rows.map((row) => rollupUsd(row.rollup)));
-  const chartOf = (index: number): string => {
-    const row = rows[index - 1];
-    if (!options.chart || row === undefined || largest <= 0) return "";
-    const usd = rollupUsd(row.rollup);
-    if (usd <= 0) return "";
-    const segments: ReadonlyArray<Segment> = CHART.map((part) => ({
-      value: part.usd(row.rollup),
-      rgb: part.rgb,
-      glyph: part.glyph,
-    }));
-    return `  ${stacked(segments, Math.max(1, Math.round((usd / largest) * CHART_CELLS)), options.color)}`;
-  };
-  const lines = body.map(
-    (row, index) =>
-      row
-        .map((cell, column) =>
-          column === 0 ? cell.padEnd(widths[0] as number) : cell.padStart(widths[column] as number),
-        )
-        .join("  ") + chartOf(index),
-  );
-  const totalUsd = rollupUsd(report.total);
-  const share = totalUsd === 0 ? 0 : Math.round((report.subagentUsd / totalUsd) * 100);
-  const notes = [
-    `${report.range.label} (${report.range.from} → ${report.range.to}), by ${report.by}. API-equivalent estimate, not a bill.`,
-    `Subagents ${money(report.subagentUsd)} (${String(share)}%) · thinking ${money(report.total.usdThinking)} · web searches ${String(report.total.webSearches)} (${money(report.total.webSearches * WEB_SEARCH_USD)})`,
-  ];
-  if (options.chart) {
-    notes.push(
-      `chart: ${CHART.map((part) => (options.color ? paint(part.rgb, part.label, true) : `${part.glyph} ${part.label}`)).join(" · ")}`,
+/** Segments of a $ by what it paid for; `other` only when the split leaves something out. */
+function segments(r: Rollup): ReadonlyArray<Segment> {
+  return PARTS.map((part) => ({ value: part.usd(r), rgb: part.rgb, glyph: part.glyph }));
+}
+
+const DIM = (text: string, color: boolean): string => (color ? `\x1b[2m${text}\x1b[0m` : text);
+const BOLD = (text: string, color: boolean): string => (color ? `\x1b[1m${text}\x1b[0m` : text);
+
+/** `▼ 12% vs the 7 days before` (green) / `▲ 8% …` (red); empty with nothing before. */
+function versus(report: Report, color: boolean): string {
+  const now = rollupUsd(report.total);
+  if (report.previousUsd <= 0) return "";
+  const relative = Math.round(((now - report.previousUsd) / report.previousUsd) * 100);
+  const text = `${relative > 0 ? "▲" : relative < 0 ? "▼" : "≈"} ${String(Math.abs(relative))}% vs the ${String(report.daily.length)} days before`;
+  if (relative === 0) return DIM(text, color);
+  return paint(relative < 0 ? "80;220;120" : "248;105;107", text, color);
+}
+
+/** `thinking $16 · subagents $0 (0%) · 12h57m of turns · 8 requests hit the usage limit`, and the skills/MCP
+ * Claude Code attributed $ to. */
+function extraLines(report: Report): ReadonlyArray<string> {
+  const total = rollupUsd(report.total);
+  const first = [`thinking ${money(report.total.usdThinking)}`];
+  if (report.subagentUsd > 0) {
+    first.push(`subagents ${money(report.subagentUsd)} (${pctOf(report.subagentUsd, total)})`);
+  }
+  if (report.total.webSearches > 0) {
+    first.push(
+      `${String(report.total.webSearches)} web searches ${money(report.total.webSearches * WEB_SEARCH_USD)}`,
     );
   }
-  const efficiency = efficiencyNote(report.total);
-  if (efficiency !== null) notes.push(efficiency);
-  const activity = activityNote(report.activity);
-  if (activity !== null) notes.push(activity);
-  for (const note of [attributionNote(report.activity), apiErrorNote(report.activity)]) {
-    if (note !== null) notes.push(note);
+  if (report.activity.turnMs > 0) first.push(`${hoursMinutes(report.activity.turnMs)} working`);
+  const limited = report.activity.apiErrors["429 usage_limit_reached"] ?? 0;
+  const otherErrors =
+    Object.values(report.activity.apiErrors).reduce((sum, count) => sum + count, 0) - limited;
+  if (limited > 0) first.push(`${String(limited)} requests hit the usage limit`);
+  if (otherErrors > 0)
+    first.push(`${String(otherErrors)} API error${otherErrors === 1 ? "" : "s"}`);
+  const lines = [first.join(" · ")];
+  const top = Object.entries(report.activity.attributedUsd)
+    .filter(([, usd]) => usd >= 0.01)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 3);
+  if (top.length > 0) {
+    lines.push(
+      `skills & MCP: ${top.map(([name, usd]) => `${name.replace(/^(skill|mcp):/, "")} ${money(usd)}`).join(" · ")}`,
+    );
   }
+  return lines;
+}
+
+/** The report: total and trend, $ per day, what the $ paid for, then one bar per row of `--by`. */
+export function formatReport(report: Report, options: FormatOptions = { color: false }): string {
+  const { color } = options;
+  const total = rollupUsd(report.total);
+  const days = Math.max(1, report.daily.length);
+  const title = `${report.range.label.toUpperCase()}  ${shortDay(report.range.from)} → ${shortDay(report.daily.at(-1)?.[0] ?? report.range.to)}`;
+  if (report.rows.length === 0) return `No usage in ${report.range.label}.`;
+  const out = [
+    `${BOLD(title, color)}   ${BOLD(money(total), color)}${report.total.unpricedTurns > 0 ? "+" : ""}   ≈ ${money(total / days)}/day   ${versus(report, color)}`.trimEnd(),
+  ];
+  if (report.daily.length > 1) {
+    out.push(
+      `${paint("110;150;230", sparkline(report.daily.map(([, usd]) => usd)), color)}  ${DIM("$ per day", color)}`,
+    );
+  }
+  const split = report.total.usdNewWork + report.total.usdCarry + report.total.usdRewrite;
+  if (split > 0) {
+    const legend = PARTS.map((part) => ({ part, usd: part.usd(report.total) }))
+      .filter(({ usd }) => usd / total >= 0.005)
+      .map(
+        ({ part, usd }) =>
+          `${paint(part.rgb, color ? "■" : part.glyph, color)} ${part.label} ${pctOf(usd, total)}`,
+      );
+    out.push(
+      "",
+      BOLD("WHAT THE $ PAID FOR", color),
+      `  ${stacked(segments(report.total), SPLIT_CELLS, color)}`,
+      `  ${legend.join("   ")}`,
+    );
+  }
+  const sessions = report.by === "session";
+  // A by-day report reads left to right in time; every other view ranks by $.
+  const rows =
+    report.by === "day"
+      ? [...report.rows].sort((a, b) => a.label.localeCompare(b.label))
+      : report.rows.slice(0, 15);
+  const label = (text: string): string =>
+    report.by === "model" ? text.replace(/^claude-/, "") : text;
+  const width = Math.min(34, Math.max(...rows.map((row) => label(row.label).length)));
+  const largest = Math.max(0, ...rows.map((row) => rollupUsd(row.rollup)));
+  const amounts = rows.map((row) => money(rollupUsd(row.rollup)));
+  const amountWidth = Math.max(...amounts.map((text) => text.length));
+  out.push("", BOLD(`BY ${report.by.toUpperCase()}`, color));
+  rows.forEach((row, index) => {
+    const usd = rollupUsd(row.rollup);
+    const cells = largest > 0 && usd > 0 ? Math.max(1, Math.round((usd / largest) * ROW_CELLS)) : 0;
+    const bar =
+      cells === 0
+        ? ""
+        : sessions
+          ? paint("110;150;230", "█".repeat(cells), color)
+          : stacked(segments(row.rollup), cells, color);
+    const extra = sessions
+      ? DIM(
+          [
+            row.weekPct == null ? "" : `≈${row.weekPct.toFixed(1)}% of 7d limit`,
+            row.usdPer100Lines == null ? "" : `${money(row.usdPer100Lines)}/100 lines`,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          color,
+        )
+      : "";
+    out.push(
+      `  ${label(row.label).slice(0, width).padEnd(width)}  ${bar}${" ".repeat(ROW_CELLS - cells)}  ${(amounts[index] as string).padStart(amountWidth)}  ${pctOf(usd, total).padStart(4)}${extra ? `  ${extra}` : ""}`,
+    );
+  });
+  if (report.rows.length > rows.length) {
+    out.push(DIM(`  … ${String(report.rows.length - rows.length)} more (--json for all)`, color));
+  }
+  out.push("", ...extraLines(report).map((line) => DIM(line, color)));
+  const warnings: Array<string> = [];
   if (report.total.unpricedTurns > 0) {
-    notes.push(
+    warnings.push(
       `${String(report.total.unpricedTurns)} turns on models with no price: totals are a floor.`,
     );
   }
   if (report.unattributedUsd > 0) {
-    notes.push(
+    warnings.push(
       `${money(report.unattributedUsd)} more in sessions no account claimed (report --account unattributed).`,
     );
   }
   const claudeCode = claudeCodeNote(report.claudeCode);
-  if (claudeCode !== null) notes.push(claudeCode);
-  notes.push(...report.gaps);
-  if (report.rows.length === 0) return `No usage in ${report.range.label}.\n${notes[0] as string}`;
-  return [...lines, "", ...notes].join("\n");
+  if (claudeCode !== null) warnings.push(claudeCode);
+  warnings.push(...report.gaps);
+  out.push(...warnings.map((line) => DIM(line, color)));
+  out.push(DIM("API-equivalent estimate, not a bill · what to change: cc-spend insights", color));
+  return out.join("\n");
 }
 
 /** `Claude Code counted $41.20 for 12 sessions: $3.10 (8%) more than the transcripts show …`. */
@@ -532,23 +564,20 @@ export interface ReportArgs {
   readonly by: Dimension;
   readonly json: boolean;
   readonly account: string | null;
-  readonly chart: boolean;
   readonly session: string | null; // id or id prefix: one session's burn-up instead of the table
 }
 
-/** `report [period] [--by <dim>] [--json] [--account <key>] [--chart] [--session <id>]` → args, or an error
+/** `report [period] [--by <dim>] [--json] [--account <key>] [--session <id>]` → args, or an error
  * message. */
 export function parseReportArgs(argv: ReadonlyArray<string>): ReportArgs | string {
   let period = "week";
   let by: Dimension = "model";
   let json = false;
   let account: string | null = null;
-  let chart = false;
   let session: string | null = null;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string;
     if (arg === "--json") json = true;
-    else if (arg === "--chart") chart = true;
     else if (arg === "--session") {
       session = argv[++i] ?? "";
       if (session === "") return "--session needs a session id (or its first characters)";
@@ -565,5 +594,5 @@ export function parseReportArgs(argv: ReadonlyArray<string>): ReportArgs | strin
       period = arg;
     } else return `Unknown report argument: ${arg}`;
   }
-  return { period, by, json, account, chart, session };
+  return { period, by, json, account, session };
 }

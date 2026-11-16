@@ -327,6 +327,7 @@ describe("report", () => {
       expect.objectContaining({ label: "last 7 days" }),
       "model",
       null, // no limit samples yet → no $ per 1%
+      expect.any(Date),
     );
     catchUpMock.mockReturnValueOnce(false);
     writeFeedMock.mockClear();
@@ -350,7 +351,7 @@ describe("report", () => {
     );
   });
 
-  it("--chart reaches the formatter; colors and width follow the terminal", async () => {
+  it("colors and width follow the terminal", async () => {
     buildReportMock.mockReturnValue({ rows: [] });
     catchUpMock.mockReturnValue(true);
     writeFeedMock.mockResolvedValue(undefined);
@@ -363,8 +364,10 @@ describe("report", () => {
     sessionFilesMock.mockReturnValue({ id: "abc", files: [] });
     try {
       const { runCli } = await fresh();
-      expect(await runCli(["report", "--chart"])).toBe(0);
+      expect(await runCli(["report"])).toBe(0);
       expect(log).toHaveBeenLastCalledWith("TABLE");
+      insightsAdviceMock.mockReturnValue([]);
+      expect(await runCli(["insights"])).toBe(0);
       expect(await runCli(["report", "--session", "abc"])).toBe(0);
       expect(log).toHaveBeenLastCalledWith("BURNUP true 120");
     } finally {
@@ -407,7 +410,7 @@ describe("insights", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const { runCli } = await fresh();
     expect(await runCli(["insights"])).toBe(0);
-    expect(log).toHaveBeenLastCalledWith("Nothing to change this week.");
+    expect(log).toHaveBeenLastCalledWith("Nothing to change this week: every habit is on target.");
     expect(writeFeedMock).toHaveBeenCalledWith("dev_example_com");
     expect(await runCli(["insights", "--snooze", "R1", "7d", "--json"])).toBe(0);
     expect(log).toHaveBeenCalledWith("R1 snoozed until 2026-10-14T00:00:00.000Z");

@@ -110,25 +110,34 @@ owner = account whose sessions-map.json has the session id, else "unattributed";
 
 ## `report` (`src/report.ts`)
 
-`cc-spend report [today|week|month|30d|YYYY-MM] [--by model|project|component|subagent|session|day] [--chart] [--json] [--account <key|unattributed>]`
+`cc-spend report [today|week|month|30d|YYYY-MM] [--by model|project|component|subagent|session|day] [--json] [--account <key|unattributed>]`
 
 `cc-spend report --session <id or prefix> [--json]`
 
 - Ranges are local days: `week` = rolling 7 days, `month` = local month to date.
-- Columns: input, output, cache read, cache write, total; footer with the
-  subagent share, thinking $, web searches, turn time (thinking time), hook
-  runs and how sessions started (`entrypoint` counts), the unattributed $ and
-  the "API-equivalent estimate" label, the top 5 attributed skills and MCP
-  servers by $ ("Attributed by Claude Code"), API errors by kind, and the
-  efficiency line (new work /
-  carry / rewrite shares and $ per MTok of new work with its band: good under
-  $33, high over $80; only rows with the split count). `--by session` labels a
-  row with Claude Code's session name when `sessions-map.json` has one, shows
-  its parts as — (the index keeps a session's total only), and adds "% of week"
-  (`usd ÷ usdPerPercentWeek`) and "$/100 lines" (lines changed from
-  `sessions-map.json`).
-- `--chart`: a stacked bar per row (input, output, cache read, cache write, web
-  search), scaled to the largest row; `--by day` then lists days in time order.
+- Visual by default (no flag), top to bottom:
+  - the total (`+` when an unpriced turn makes it a floor), $ per day, and the
+    change against the same number of days just before the range
+    (`previousUsd`; green down, red up);
+  - a sparkline of $ per day (`daily`: each local day from the range start to
+    today; a `YYYY-MM` range stops at the month's last day);
+  - "WHAT THE $ PAID FOR": one stacked bar of new work, history re-reads
+    (carry) and cache rebuilds (rewrite), plus `other` for what the split does
+    not cover (web searches, rows indexed before 2026-10-18); hidden when no
+    row has the split;
+  - one row per `--by` value: the same stacked bar scaled to the largest row,
+    the $ and its share. `--by day` lists days in time order, the rest rank by
+    $ and show the top 15 (`--json` has all). `--by session` labels a row with
+    Claude Code's session name when `sessions-map.json` has one, draws a plain
+    bar (the index keeps a session's total only) and adds the share of the 7d
+    limit (`usd ÷ usdPerPercentWeek`) and $ per 100 changed lines
+    (`sessions-map.json`);
+  - one dim line: thinking $, subagent $ and share, web searches, turn time,
+    requests that hit the usage limit (`429 usage_limit_reached`) and other API
+    errors; the top 3 skills and MCP servers Claude Code attributed $ to; then
+    the unpriced, unattributed, Claude Code total and self-check notes.
+- Money is whole $ from $10 up. `--json` prints the `Report` as built, hook runs
+  and entrypoints included.
 - `--session` (`src/session-report.ts`): finds the one session whose id starts
   with the argument (main file and subagent files), reads them whole through
   the session model (`docs/live.md`) and prints $ per time slot, the running

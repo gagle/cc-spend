@@ -53,6 +53,7 @@ export interface Finding {
     readonly text: string;
   };
   readonly snoozedUntil: string | null;
+  readonly trendUsdPerWeek?: number | null; // $/week now − in the last closed record (or the start); null: no record yet
 }
 
 export interface Feed {
