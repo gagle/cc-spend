@@ -48,6 +48,14 @@ For Team / Enterprise. Mark holidays and days off, and the daily max
 re-splits. Look back at any day, open where its $ went (`d`), or correct it
 (`u`).
 
+## `cc-spend settings`: your statusline, your way
+
+![cc-spend settings: pick parts by number, place them on a grid, live preview](https://raw.githubusercontent.com/gagle/cc-spend/main/media/settings.png)
+
+Pick which parts show and in what order: type a part's number into the
+grid, one grid row per statusline line, and watch the preview change.
+`r` resets to the default, `Enter` saves.
+
 ## Spend less, and prove it
 
 1. **See.** The statusline shows the cost as you work.
