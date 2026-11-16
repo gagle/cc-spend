@@ -45,7 +45,9 @@ finding, its $ per week (a 30-day window × 7/30) ÷ $ per 1% of the 7d limit;
 Code also bills requests no transcript line shows), so `weekPct` is too.
 
 Ranking (`coach`): not snoozed first, then $ descending, a finding with no $
-(R8) first; findings under $0.50 (`MIN_FINDING_USD`) drop; at most 10.
+(R8) first; findings under $0.50 (`MIN_FINDING_USD`) drop; at most 10. Then
+`withTrends` (`docs/record.md`) re-ranks by $ per week + its rise since the
+last record, so a habit that is getting worse comes first.
 
 ## Rule texts (`RULE_INFO`)
 
@@ -60,12 +62,14 @@ README when `src/rules.ts` changes.
 ## Surfaces
 
 - `cc-spend insights [--week|--month] [--json] [--rules] [--snooze <rule> <N>d]`:
-  catches the index up, rewrites `feed.json`, prints each finding (a blank
-  line between them) with its evidence, `why` and fix; a finding with no $
-  (R8) prints no amount. `--rules` prints every rule (checks, why, $, fix) and
-  marks with `●` the ones found now; `--rules --json` gives the catalog with
-  `found`. `--snooze R1 0d` clears a snooze. Snoozes live in
-  `config.json` `snoozed` (rule → ISO end).
+  catches the index up, rewrites `feed.json`, prints "YOU COULD SAVE" (the $ of
+  the open findings), then each finding (a blank line between them): its title,
+  a bar scaled to the largest $, the $ (and the share of the 7d limit on
+  Pro/Max), its trend against last week or the start (`▲ +$13 vs last week`red,`▼`green, hidden under $0.50), then`→`the fix (the setting or command
+dimmed after it unless the text already names it), the evidence (home paths
+as`~/`) and `why`, dimmed. A finding with no $ (R8) says "costs time, not
+$". `--rules`prints every rule (checks, why, $, fix) and
+marks with`●`the ones found now;`--rules --json`gives the catalog with`found`. `--snooze R1 0d`clears a snooze. Snoozes live in`config.json` `snoozed` (rule → ISO end).
 - Statusline part 14 `coach` ("Next action", `src/next-action.ts`): one short
   action, the most urgent first, from what the render already has (one small
   `feed.json` read, no transcripts):
@@ -78,7 +82,7 @@ README when `src/rules.ts` changes.
   | context ≥ 150k tokens (`total_input_tokens`)                                                                   | `» /compact at the next break · 520k re-read each turn, ~$0.10`                                                                                           |
   | a 5h or 7d window `at-risk`                                                                                    | `» /model sonnet for routine steps · keep Opus for the hard ones`                                                                                         |
   | a record closed and `cc-spend record` not run since                                                            | `» record #2 done: 4/5 habits better · cc-spend record` (`feed.json.record.notice`)                                                                       |
-  | else the first non-snoozed finding except R8                                                                   | `» <rule action> · ~$X/<window>` (`RULE_INFO.action`; the title in feeds written before it)                                                               |
+  | else the first non-snoozed finding except R8                                                                   | `» <rule action> · ~$X/<window>` (`RULE_INFO.action`; the title in feeds written before it), `· ▲ up on last week` when its `trendUsdPerWeek` ≥ $0.50     |
 
   R8 is skipped there: the `warnings` part already shows when a limit runs
   out. On by default, on the second row before the limit warnings.

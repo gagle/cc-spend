@@ -142,7 +142,7 @@ What `cc-spend --statusline` prints and `renderStatusline` consumes:
 budget fields (absent on Pro/Max; `ledgerAgeMs` is the last good ledger
 reading's age while the refresher fails, else null), `capSource`, `extraUsage` (Pro/Max only),
 resolved `rateLimits` with their `source` and `readingAt`, `runway` per window,
-`coach` (top finding except R8: `{ id, title, action, usd, window }`), `rateLimitsCache` (old shims),
+`coach` (top finding except R8: `{ id, title, action, usd, window, rising }`), `rateLimitsCache` (old shims),
 `spendLimitPct`, `spendLimitUsd` (`{ used, limit, period }` or null),
 `apiDetail` (fresh API windows with dollars, severity and extra windows; null
 when stale), `cache` (a `CacheForecast`), `hasSpendCap`, `planType`.

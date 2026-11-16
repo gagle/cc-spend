@@ -804,6 +804,14 @@ describe("coach tip", () => {
       action: "a",
       usd: 1,
       window: "month",
+      rising: false,
+    });
+    writeJson("feed.json", {
+      schemaVersion: 1,
+      advice: [{ id: "R1", title: "T", usd: 1, window: "week", trendUsdPerWeek: 0.5 }],
+    });
+    expect((await buildStatuslineState({ session_id: "s" }, NOW)).coach).toMatchObject({
+      rising: true,
     });
     writeJson("feed.json", {
       schemaVersion: 1,
@@ -825,6 +833,7 @@ describe("coach tip", () => {
       action: null,
       usd: null,
       window: "week",
+      rising: false,
     });
   });
 });

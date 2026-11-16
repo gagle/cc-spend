@@ -91,8 +91,9 @@ behind (a warn when behind or never run).
 
 ## `cc-spend report`
 
-API-equivalent $ from local transcripts, `--chart` bars, `--session <id>` for
-one session's $ over time; see `docs/transcript-index.md`.
+Where the $ went, visual by default: total and trend, $ per day, what it paid
+for (new work, history re-reads, cache rebuilds) and a bar per row of `--by`;
+`--session <id>` for one session's $ over time; see `docs/transcript-index.md`.
 
 ## `cc-spend live`
 
@@ -103,16 +104,18 @@ Read-only. See `docs/live.md`.
 
 ## `cc-spend record`
 
-Your habits per period (7 days by default) against a baseline (the 7 days
-before record #1) and the record before. Records start and end by themselves in
-the background refresher; this command only shows them. `--all` lists every
+How you're doing: each habit against its target, last week and your start (the
+7 days before record #1), with a trend, what to fix next and the week's focus.
+Records (7 days by default) start and end by themselves in the background
+refresher; this command only shows them. `--all` lists every
 record, `--days N` sets the next one's length, `--json` prints the data. Running
 it clears the statusline's `» record #N done …` note. See `docs/record.md`.
 
 ## `cc-spend insights`
 
-Ranked findings with $, why and the exact fix; `--rules` explains every rule;
-see `docs/coach.md`.
+What you could save per week, then each finding with a bar, its $, its trend
+against last week (or your start), the fix, the evidence and why; `--rules`
+explains every rule; see `docs/coach.md`.
 
 ## Hidden modes
 
@@ -162,8 +165,9 @@ Claude Code cuts a line that does not fit with `…`; more lines is the fix.
     once Claude Code (v2.1.284+) sends the dollar amounts and period.
 14. `» <action>` — the next action: what to do now (cache about to go cold,
     cold cache, deep context, a limit at risk), a record that closed unseen
-    (`» record #2 done: 4/5 habits better · cc-spend record`), or the week's top
-    habit with its $ (`docs/coach.md`); on its own line by default.
+    (`» record #2 done: 4/5 habits better · focus ✔ · cc-spend record`), or the
+    week's top habit with its $, `▲ up on last week` when it grew
+    (`docs/coach.md`); on its own line by default.
     `⬆ claude 2.1.320` shows left of it when npm has a newer Claude Code than the
     running one (the hook payload `version`); the refresher reads npm, never the render.
 

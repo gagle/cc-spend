@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { Finding } from "./feed.js";
 import {
   addDays,
   advance,
@@ -9,12 +10,14 @@ import {
   daysSoFar,
   emptyRecords,
   focusChange,
+  focusProgress,
   formatAll,
   formatRecord,
   habitsBetter,
   metricChange,
   METRICS,
   metricValue,
+  onTarget,
   pickFocus,
   type RecordEntry,
   recordJson,
@@ -25,7 +28,9 @@ import {
   savedPerWeek,
   shortDay,
   type Snapshot,
-  sparkline,
+  trendName,
+  trendReference,
+  withTrends,
 } from "./record.js";
 
 function snap(fields: Partial<Snapshot> = {}): Snapshot {
@@ -282,6 +287,18 @@ describe("recordNotice", () => {
         baseline: snap({ usd: 0, growth: 0, cacheRead: 0, input: 0, cacheWrite: 0 }),
       }),
     ).toBe("record #1 done · cc-spend record");
+    expect(
+      recordNotice({
+        ...file,
+        closed: [{ ...closed(1, snap({ usdRewrite: 5 })), focus: "R11", focusShare: 0.3 }],
+      }),
+    ).toBe("record #1 done: 1/5 habits better · focus ✔ · cc-spend record");
+    expect(
+      recordNotice({
+        ...file,
+        closed: [{ ...closed(1, snap({ usdRewrite: 50 })), focus: "R11", focusShare: 0.3 }],
+      }),
+    ).toBe("record #1 done: 0/5 habits better · focus ✖ · cc-spend record");
     expect(recordNotice({ ...file, unseen: null })).toBeNull();
     expect(recordNotice({ ...file, unseen: 9 })).toBeNull();
     expect(
@@ -328,50 +345,79 @@ describe("formatRecord", () => {
     ...fields,
   });
 
-  it("the live record: progress, verdict, habits vs the previous record, focus, moves, volume", () => {
-    const text = strip(formatRecord(view(), false));
-    expect(text).toContain(
-      "RECORD #2  Nov 19 → Nov 25  ▕██████████████░░░░░░▏ day 5/7 · ends Nov 26",
-    );
-    expect(text).toContain(
-      "4 of 5 habits better than baseline · ~$70/week saved at your new rates",
-    );
-    expect(text).toMatch(/HABITS\s+baseline\s+prev\s+now\s+vs prev\s+aim/);
-    expect(text).toMatch(/\$ per MTok new work\s+\$50\s+\$50\s+\$25\s+−50% ✔\s+< \$33/);
-    expect(text).toMatch(/re-sending\s+20%\s+20%\s+4%\s+−16pt ✔/);
-    expect(text).toContain("FOCUS  R4 Prompt cache re-paid");
-    expect(text).toContain("10% of $ now (was 30%) · better ✔");
-    expect(text).toMatch(/MOVED {2}better {2}R10 Most spend re-reads context\s+−\$40\/week/);
-    expect(text).toMatch(/worse {3}R5 Deep context\s+\+\$28\/week/);
-    expect(text).toContain("$ total    ≥ $50 so far");
-    expect(text).toContain("prompts    14/day          prev 10/day · baseline 10/day");
-    expect(text).toContain("$/prompt   $0.71");
-    expect(text).toContain(
-      "commands   2 /clear · 4 /compact · 5 auto-compact · 3 /model · 1 interrupts",
-    );
-    expect(text).toContain("active     1h24m/day · 3 sessions · opus-5-5 180% of $ · 7d peak 60%");
+  it("the live record: how you're doing, habits vs last week, what to fix, focus, changes, activity", () => {
+    expect(strip(formatRecord(view(), false))).toMatchInlineSnapshot(`
+      "RECORD #2  Nov 19 → Nov 25  ▕██████████████░░░░░░▏ day 5 of 7
+
+      HOW YOU'RE DOING  ●●●●○  4 of 5 habits on target
+        new work costs 50% less than at your start · ~$70/week saved
+
+      HABIT                NOW   TARGET   TREND   VS LAST WEEK
+      cost of new work     $25    < $33   ██▅     ▼ 50% better
+      wasted $             50%    < 10%   ▃▂▅     ▲ 30pt worse
+      cache hits           95%    ≥ 90%   ▇▇█     ▲ 15pt better
+      cache rebuilds        4%    < 10%   ▂▂▁     ▼ 16pt better
+      history re-reads     40%    < 54%   ▅▅▄     ▼ 10pt better
+
+      FIX NEXT
+        ✖ wasted $ 50%            → /compact earlier · ~$28/week
+            share of $ the fixes in cc-spend insights would save
+
+      FOCUS THIS WEEK  /compact before breaks (R4 Prompt cache re-paid)
+        cache hits 80% → 95% now  ✔ better, keep going
+
+      CHANGED MOST vs last week
+        ▼ Most spend re-reads context          −$40/week
+        ▼ Subagents on a premium model         −$20/week
+        ▲ Deep context                         +$28/week
+        ▲ Prompt cache re-paid                  +$7/week
+
+      ACTIVITY  how much you worked, not scored
+        ≥ $50 so far (start $100) · 14 prompts/day (start 10) · $0.71/prompt (start $1.43)
+        1h24m active/day · 3 sessions · 2 /clear · 9 compacts · 3 /model · 1 interrupt · opus-5-5 180% of $ · 7d limit peak 60%
+
+      API-equivalent estimate, not a bill · every week: cc-spend record --all · fixes: cc-spend insights"
+    `);
     const colored = formatRecord(view(), true);
-    // Better in a green pill, worse in a red one; a value green when it meets its aim, red when not.
-    expect(colored).toContain("\x1b[1;38;2;80;220;120;48;2;18;58;34m   −50% ✔ \x1b[0m");
-    expect(colored).toContain("\x1b[1;38;2;248;105;107;48;2;70;22;24m  +30pt ✖ \x1b[0m");
+    // On target green, off target red; better green, worse red.
     expect(colored).toContain("\x1b[1;38;2;80;220;120m$25\x1b[0m");
     expect(colored).toContain("\x1b[1;38;2;248;105;107m50%\x1b[0m");
+    expect(colored).toContain("\x1b[1;38;2;80;220;120m▼ 50% better\x1b[0m");
+    expect(colored).toContain("\x1b[1;38;2;248;105;107m▲ 30pt worse\x1b[0m");
   });
 
-  it("too early: dim values, no verdict, no moves", () => {
-    const text = strip(
-      formatRecord(view({ today: "2026-11-20", live: { ...live, days: 2 } }), false),
-    );
-    expect(text).toContain("Too early: 2 day(s). Numbers settle after day 3.");
-    expect(text).not.toContain("✔");
-    expect(text).not.toContain("MOVED");
-    expect(text).toContain("10% of $ now (was 30%)\n");
-    const colored = formatRecord(view({ today: "2026-11-20", live: { ...live, days: 2 } }), true);
-    expect(colored).toContain("\x1b[1;38;2;80;220;120m$25\x1b[0m"); // aim colors from day 1
-    expect(colored).not.toContain("48;2;"); // no pills before day 3
+  it("too early: no comparison, no changes; aims still colored", () => {
+    const early = view({ today: "2026-11-20", live: { ...live, days: 2 } });
+    expect(strip(formatRecord(early, false))).toMatchInlineSnapshot(`
+      "RECORD #2  Nov 19 → Nov 25  ▕██████░░░░░░░░░░░░░░▏ day 2 of 7
+
+      HOW YOU'RE DOING  ●●●●○  4 of 5 habits on target
+        Too early to compare: day 2. Numbers settle after day 3.
+
+      HABIT                NOW   TARGET   TREND
+      cost of new work     $25    < $33   ██▅
+      wasted $             50%    < 10%   ▃▂▅
+      cache hits           95%    ≥ 90%   ▇▇█
+      cache rebuilds        4%    < 10%   ▂▂▁
+      history re-reads     40%    < 54%   ▅▅▄
+
+      FIX NEXT
+        ✖ wasted $ 50%            → /compact earlier · ~$70/week
+            share of $ the fixes in cc-spend insights would save
+
+      FOCUS THIS WEEK  /compact before breaks (R4 Prompt cache re-paid)
+        cache hits 80% → 95% now
+
+      ACTIVITY  how much you worked, not scored
+        ≥ $50 so far (start $100) · 35 prompts/day (start 10) · $0.71/prompt (start $1.43)
+        3h30m active/day · 3 sessions · 2 /clear · 9 compacts · 3 /model · 1 interrupt · opus-5-5 180% of $ · 7d limit peak 60%
+
+      API-equivalent estimate, not a bill · every week: cc-spend record --all · fixes: cc-spend insights"
+    `);
+    expect(formatRecord(early, true)).toContain("\x1b[1;38;2;80;220;120m$25\x1b[0m");
   });
 
-  it("no baseline, no previous record, no habits, no focus, no limits, no $", () => {
+  it("no start, no previous record, no habits, no focus, no limits, no $", () => {
     const bare = snap({
       usd: 0,
       growth: 0,
@@ -385,107 +431,159 @@ describe("formatRecord", () => {
       sessions: 0,
       activeMs: 0,
     });
-    const text = strip(
-      formatRecord(
-        view({ file: { ...emptyRecords(), current: { ...current, focus: null } }, live: bare }),
-        false,
+    expect(
+      strip(
+        formatRecord(
+          view({ file: { ...emptyRecords(), current: { ...current, focus: null } }, live: bare }),
+          false,
+        ),
       ),
-    );
-    expect(text).toContain("No baseline yet");
-    expect(text).toMatch(/HABITS\s+baseline\s+now\s+vs base/);
-    expect(text).toMatch(/\$ per MTok new work\s+—\s+—/);
-    expect(text).not.toContain("FOCUS");
-    expect(text).not.toContain("prompts");
-    expect(text).toContain("active     0h00m/day · 0 sessions\n");
+    ).toMatchInlineSnapshot(`
+      "RECORD #2  Nov 19 → Nov 25  ▕██████████████░░░░░░▏ day 5 of 7
+
+      HOW YOU'RE DOING    0 of 0 habits on target
+        No start to compare with: no use in the 7 days before record #1.
+
+      HABIT                NOW   TARGET   TREND
+      cost of new work       —    < $33   ·
+      wasted $               —    < 10%   ·
+      cache hits             —    ≥ 90%   ·
+      cache rebuilds         —    < 10%   ·
+      history re-reads       —    < 54%   ·
+
+      ACTIVITY  how much you worked, not scored
+        $0 so far
+        0h00m active/day · 0 sessions
+
+      API-equivalent estimate, not a bill · every week: cc-spend record --all · fixes: cc-spend insights"
+    `);
   });
 
-  it("deltas round to ± and moves list only one side; costlier rates say so", () => {
-    const worse = { ...live, days: 7, usd: 101, rules: { ...snap().rules, R10: 60 } };
-    const text = strip(
-      formatRecord(view({ live: worse, file: { ...view().file, closed: [] } }), false),
-    );
-    expect(text).toContain("~$1/week more at your new rates");
-    expect(text).toMatch(/MOVED {2}worse {3}R10/);
-    expect(text).toMatch(/cache reads\s+80%\s+95%\s+\+15pt ✔/);
+  it("against the start: costlier rates, same rates, a worse focus, an unknown rule", () => {
+    const costlier = { ...live, days: 7, usd: 101, rules: { ...snap().rules, R10: 60 } };
+    expect(
+      strip(formatRecord(view({ live: costlier, file: { ...view().file, closed: [] } }), false)),
+    ).toMatchInlineSnapshot(`
+      "RECORD #2  Nov 19 → Nov 25  ▕██████████████░░░░░░▏ day 5 of 7
+
+      HOW YOU'RE DOING  ●●●○○  3 of 5 habits on target
+        new work costs 1% more than at your start · ~$1/week more
+
+      HABIT                NOW   TARGET   TREND   VS YOUR START
+      cost of new work     $51    < $33   ██      ≈ same
+      wasted $             30%    < 10%   ▃▃      ≈ same
+      cache hits           95%    ≥ 90%   ▇█      ▲ 15pt better
+      cache rebuilds        2%    < 10%   ▂▁      ▼ 18pt better
+      history re-reads     20%    < 54%   ▅▂      ▼ 30pt better
+
+      FIX NEXT
+        ✖ cost of new work $51    → /clear between tasks · ~$60/week
+            $ per 1M tokens of new output and context: lower means less re-reading
+        ✖ wasted $ 30%            → /compact before breaks · ~$20/week
+            share of $ the fixes in cc-spend insights would save
+
+      FOCUS THIS WEEK  /compact before breaks (R4 Prompt cache re-paid)
+        cache hits 80% → 95% now  ✔ better, keep going
+
+      CHANGED MOST vs your start
+        ▲ Most spend re-reads context          +$10/week
+
+      ACTIVITY  how much you worked, not scored
+        ≥ $101 so far (start $100) · 10 prompts/day (start 10) · $1.44/prompt (start $1.43)
+        1h00m active/day · 3 sessions · 2 /clear · 9 compacts · 3 /model · 1 interrupt · opus-5-5 89% of $ · 7d limit peak 60%
+
+      API-equivalent estimate, not a bill · every week: cc-spend record --all · fixes: cc-spend insights"
+    `);
     const same = strip(
       formatRecord(
         view({
           live: { ...snap(), days: 5 },
-          file: { ...view().file, closed: [], current: { ...current, focusShare: 0.2 } },
+          file: { ...view().file, closed: [], current: { ...current, focus: "R1", focusShare: 0 } },
         }),
         false,
       ),
     );
-    expect(same).toMatch(/\$ per MTok new work\s+\$50\s+\$50\s+±0% ≈/);
-    expect(same).toMatch(/cache reads\s+80%\s+80%\s+±0pt ≈/);
-    expect(same).toContain("same ≈");
-    expect(same).not.toContain("/week saved");
-    const focusWorse = strip(formatRecord(view({ live: { ...live, rules: { R4: 40 } } }), false));
-    expect(focusWorse).toContain("worse ✖");
+    expect(same).toContain("new work costs the same as at your start");
+    expect(same).toMatch(/cost of new work\s+\$50\s+< \$33\s+\S+\s+≈ same/);
+    expect(same).toContain("share of $ 0% → 0% now  ≈ same");
+    const focusWorse = strip(
+      formatRecord(view({ live: { ...live, cacheRead: 50, input: 50 } }), false),
+    );
+    expect(focusWorse).toContain("cache hits 80% → 50% now  ✖ worse");
+    const unknown = strip(
+      formatRecord(
+        view({ file: { ...view().file, current: { ...current, focus: "R99" } } }),
+        false,
+      ),
+    );
+    expect(unknown).toContain("FOCUS THIS WEEK   (R99 )");
     const zeroBase = strip(
       formatRecord(
         view({ file: { ...view().file, closed: [], baseline: snap({ growth: 1, usd: 0 }) } }),
         false,
       ),
     );
-    expect(zeroBase).toMatch(/\$ per MTok new work\s+\$0\s+\$25\s+ /);
+    expect(zeroBase).not.toContain("new work costs");
+    expect(zeroBase).toMatch(/cost of new work\s+\$25\s+< \$33\s+\S+\s+≈ same/); // from $0 there is no %
   });
 
   it("a record that closed since the last look comes first", () => {
-    const closedNow = { ...prevEntry, n: 1 };
+    const one = { ...prevEntry, n: 1 };
     const two: RecordEntry = { ...prevEntry, n: 2, focus: "R1", focusShare: 0.5 };
     const file = {
       ...emptyRecords(),
       baseline: snap(),
       current: { ...current, n: 3 },
-      closed: [closedNow, two],
+      closed: [one, two],
     };
-    const text = strip(formatRecord(view({ file, closedNow: two }), false));
-    expect(text).toContain("RECORD #2 CLOSED  Nov 12 → Nov 18");
-    expect(text).toContain("Focus R1 Subagents on a premium model: ✔ done");
-    expect(text).toContain("vs record #1: 0 of 5 habits better");
-    expect(text).toContain("Record #3 started Nov 19 · new focus: R4 Prompt cache re-paid");
+    expect(strip(formatRecord(view({ file, closedNow: two }), false)).split("\n\n")[0])
+      .toMatchInlineSnapshot(`
+      "RECORD #2 DONE  Nov 12 → Nov 18  1 of 5 habits on target
+        0 of 5 habits better than the week before
+        focus subagents on Sonnet: CLAUDE_CODE_SUBAGENT_MODEL=sonnet: ✔ kept"
+    `);
     const first = strip(
       formatRecord(
         view({
-          file: { ...file, closed: [closedNow] },
-          closedNow: { ...closedNow, focus: "R10", focusShare: 0.2 },
+          file: { ...file, closed: [one] },
+          closedNow: { ...one, focus: "R10", focusShare: 0.2 },
         }),
         false,
       ),
     );
-    expect(first).toContain("Focus R10 Most spend re-reads context: ✖ not yet");
-    expect(first).not.toContain("vs record #");
-    const same = strip(
+    expect(first).toContain("better than your start");
+    expect(first).toContain("focus /clear between tasks: ≈ no change");
+    const slipped = strip(
       formatRecord(
         view({
-          file: { ...file, current: { ...current, focus: null } },
-          closedNow: { ...closedNow, focus: "R10", focusShare: 0.4 },
+          file: { ...file, closed: [one], baseline: snap({ usdCarry: 10 }) },
+          closedNow: { ...one, focus: "R10" },
         }),
         false,
       ),
     );
-    expect(same).toContain("≈ same");
-    expect(same).toContain("Record #2 started Nov 19\n");
-    const noFocus = strip(formatRecord(view({ closedNow: { ...closedNow, focus: null } }), false));
-    expect(noFocus).not.toContain("Focus R");
+    expect(slipped).toContain("✖ slipped");
+    const noStart = strip(
+      formatRecord(
+        view({
+          file: { ...file, baseline: null, closed: [one] },
+          closedNow: { ...one, focus: null },
+        }),
+        false,
+      ),
+    );
+    expect(noStart).not.toContain("habits better than");
+    expect(noStart).not.toContain("focus ");
     const unknownRule = strip(
-      formatRecord(
-        view({
-          file: { ...file, current: { ...current, focus: "R99" } },
-          closedNow: { ...closedNow, focus: "R99", focusShare: 1 },
-        }),
-        false,
-      ),
+      formatRecord(view({ closedNow: { ...one, focus: "R99", focusShare: 1 } }), false),
     );
-    expect(unknownRule).toContain("Focus R99 : ✔ done");
-    expect(unknownRule).toContain("FOCUS  R99  · ");
+    expect(unknownRule).toContain("focus R99: ✔ kept");
     expect(
-      strip(formatRecord(view({ closedNow: { ...closedNow, snapshot: undefined } }), false)),
-    ).not.toContain("CLOSED");
+      strip(formatRecord(view({ closedNow: { ...one, snapshot: undefined } }), false)),
+    ).not.toContain("DONE");
   });
 
-  it("edge values: a focus with no $ or share, unknown references, no moves", () => {
+  it("edge values: a focus with no share, unknown values, no moves, no prompts counted", () => {
     const flat = snap({
       days: 7,
       usd: 0,
@@ -494,14 +592,46 @@ describe("formatRecord", () => {
     const file: RecordsFile = {
       ...emptyRecords(),
       baseline: snap({ habits: null }),
-      current: { ...current, focusShare: null },
+      current: { ...current, focus: "R1", focusShare: null },
       closed: [{ ...prevEntry, snapshot: flat }],
     };
-    const text = strip(formatRecord(view({ file, live: { ...flat, usd: 0 } }), false));
-    expect(text).toContain("0% of $ now\n");
-    expect(text).toContain("prev 0/day · baseline —");
-    expect(text).toContain("prev — · baseline —");
-    expect(text).not.toContain("MOVED");
+    const text = strip(formatRecord(view({ file, live: flat }), false));
+    expect(text).toContain("share of $ — now");
+    expect(text).toContain("$0 so far (start $100) · 0 prompts/day\n");
+    expect(text).not.toContain("CHANGED MOST");
+  });
+
+  it("a habit off target with no rule behind it; no $ verdict; a closed record with no snapshot", () => {
+    const pricey = snap({ ...live, growth: 100_000, rules: { R99: 1 } }); // $500/M
+    const text = strip(
+      formatRecord(
+        view({
+          live: pricey,
+          file: {
+            ...view().file,
+            baseline: snap({ growth: 0 }),
+            closed: [{ ...prevEntry, snapshot: undefined }],
+          },
+        }),
+        false,
+      ),
+    );
+    expect(text).toMatch(/✖ cost of new work \$500 +→ R99 · ~\$1\.40\/week$/m); // no action known: its id
+    expect(text).toMatch(/HOW YOU'RE DOING .*\n\nHABIT/); // no $ verdict line
+    const noRules = strip(
+      formatRecord(view({ live: snap({ ...live, growth: 100_000, rules: {} }) }), false),
+    );
+    expect(noRules).toMatch(/✖ cost of new work \$500 +→ \/clear between tasks/); // R10 by default
+    const zero = strip(
+      formatRecord(
+        view({
+          live: snap({ ...live, usd: 0, growth: 1 }),
+          file: { ...view().file, baseline: snap({ usd: 0, growth: 1 }), closed: [] },
+        }),
+        false,
+      ),
+    );
+    expect(zero).toMatch(/cost of new work +\$0 +< \$33 +▁▁ /);
   });
 
   it("no record yet", () => {
@@ -510,13 +640,75 @@ describe("formatRecord", () => {
   });
 });
 
-describe("formatAll and sparkline", () => {
-  it("sparkline scales min..max; equal values are flat; unknown is ·", () => {
-    expect(sparkline([1, 2, 3])).toBe("▁▅█");
-    expect(sparkline([2, 2])).toBe("▁▁");
-    expect(sparkline([null, 1, 3])).toBe("·▁█");
+describe("focusProgress, onTarget, trendReference, withTrends", () => {
+  const entry: RecordEntry = { n: 1, from: "a", to: "b", focus: "R11", focusShare: 0.3 };
+
+  it("a focus with a habit is judged by that habit; without one, by its share of $", () => {
+    expect(focusProgress(entry, snap({ usdRewrite: 5 }), snap())).toMatchObject({
+      was: 0.2,
+      now: 0.05,
+      change: "better",
+    });
+    expect(focusProgress(entry, snap(), null)).toMatchObject({ metric: null, was: 0.3, now: 0 });
+    expect(focusProgress({ ...entry, focus: null }, snap(), snap())).toBeNull();
+    expect(focusProgress({ ...entry, focus: "R1" }, snap({ usd: 0 }), snap())).toMatchObject({
+      now: null,
+      change: null,
+    });
   });
 
+  it("onTarget counts the habits that meet their aim, out of those known", () => {
+    expect(onTarget(snap())).toEqual({ met: 1, of: 5 }); // re-reading 50% < 54%
+    expect(onTarget(snap({ usd: 0, growth: 0, cacheRead: 0, input: 0, cacheWrite: 0 }))).toEqual({
+      met: 0,
+      of: 0,
+    });
+  });
+
+  it("trendReference: the last closed record, else the start", () => {
+    const closed: RecordEntry = { ...entry, snapshot: snap({ usd: 7 }) };
+    expect(trendReference({ ...emptyRecords(), baseline: snap(), closed: [closed] })?.usd).toBe(7);
+    expect(trendReference({ ...emptyRecords(), baseline: snap() })?.usd).toBe(100);
+    expect(trendReference(emptyRecords())).toBeNull();
+    expect(trendName({ ...emptyRecords(), closed: [closed] })).toBe("last week");
+    expect(trendName(emptyRecords())).toBe("your start");
+  });
+
+  it("withTrends: $/week against the reference, a rising one ranks up; snoozed last, no-$ first", () => {
+    const finding = (id: string, usd: number | null, fields: Partial<Finding> = {}): Finding => ({
+      id,
+      title: id,
+      usd,
+      window: "week",
+      evidence: "",
+      fix: { kind: "habit", text: "" },
+      snoozedUntil: null,
+      ...fields,
+    });
+    const ranked = withTrends(
+      [
+        finding("R4", 25),
+        finding("R5", 12),
+        finding("R2", 30, { snoozedUntil: "2099-01-01" }),
+        finding("R8", null),
+        finding("R9", 30, { window: "month" }),
+        finding("R7", 30, { window: "month" }), // ties R9: input order
+      ],
+      snap({ rules: { R4: 30, R5: 0 } }),
+    );
+    expect(ranked.map((f) => [f.id, f.trendUsdPerWeek])).toEqual([
+      ["R8", null],
+      ["R4", -5], // scores 25; R5 scores 12 + its rise 12 = 24
+      ["R5", 12],
+      ["R9", 7],
+      ["R7", 7],
+      ["R2", 30],
+    ]);
+    expect(withTrends([finding("R4", 5)], null)[0]?.trendUsdPerWeek).toBeNull();
+  });
+});
+
+describe("formatAll", () => {
   it("baseline, closed and live rows with focus results and a trend", () => {
     const closed: RecordEntry = {
       n: 1,
@@ -539,13 +731,26 @@ describe("formatAll and sparkline", () => {
       closed: [closed, { ...closed, n: 9, snapshot: undefined }],
       current,
     };
-    const live = snap({ from: "2026-11-19", days: 4, growth: 4_000_000 });
-    const text = strip(formatAll({ file, live, today: "2026-11-22", closedNow: null }, false));
-    expect(text).toMatch(/ b {2}Nov 5 → Nov 11\s+\$50\s+30%\s+80%\s+20%\s+\$100\s+—\s+$/m);
-    expect(text).toMatch(/ 1 {2}Nov 12 → Nov 18\s+\$50 .*R10 {2}✔$/m);
-    expect(text).toMatch(/ 2 {2}Nov 19 → now\s+\$25 .*\$100…\s+R4 {2}✔ so far$/m);
-    expect(text).toMatch(/trend\s+██▁\s+▁▁▁/);
-    expect(text).toContain("Next record: 7 days. The live one is on day 4.");
+    const live = snap({
+      from: "2026-11-19",
+      days: 4,
+      growth: 4_000_000,
+      cacheRead: 95,
+      input: 0,
+      cacheWrite: 5,
+    });
+    expect(strip(formatAll({ file, live, today: "2026-11-22", closedNow: null }, false)))
+      .toMatchInlineSnapshot(`
+      "RECORDS  b = your start, the 7 days before record #1
+
+       #  period              cost/M  wasted    hits rebuilt   $ total  focus  result
+       b  Nov 5 → Nov 11         $50     30%     80%     20%      $100      —  
+       1  Nov 12 → Nov 18        $50     30%     80%     20%      $100    R10  ≈
+       2  Nov 19 → now           $25     30%     95%     20%     $100…     R4  ✔ so far
+          trend                  ██▅     ▃▃▃     ▇▇█     ▂▂▂
+
+      Next record: 7 days. The live one is on day 4."
+    `);
     const colored = formatAll({ file, live, today: "2026-11-22", closedNow: null }, true);
     expect(colored).toContain("\x1b[1;38;2;80;220;120m$25\x1b[0m");
     expect(colored).toContain("\x1b[1;38;2;248;105;107m$50\x1b[0m");
@@ -554,6 +759,7 @@ describe("formatAll and sparkline", () => {
         {
           file: {
             ...file,
+            baseline: null,
             closed: [
               { ...closed, focusShare: 0.1 },
               { ...closed, n: 2, focusShare: 0.5 },
@@ -582,6 +788,18 @@ describe("formatAll and sparkline", () => {
       ),
     );
     expect(noCurrent).toContain("The live one is on day 0.");
+    const unknown = strip(
+      formatAll(
+        {
+          file: { ...file, baseline: snap({ usd: 0, growth: 0 }) },
+          live: null,
+          today: "x",
+          closedNow: null,
+        },
+        false,
+      ),
+    );
+    expect(unknown).toMatch(/ b {2}Nov 5 → Nov 11\s+—/);
   });
 });
 

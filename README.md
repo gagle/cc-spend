@@ -65,25 +65,34 @@ grid, one grid row per statusline line, and watch the preview change.
    your own baseline.
 
 `record` needs no start or stop. The first week starts by itself, and the 7
-days before it become your baseline. It scores how you work, not how much:
-a busy week does not look worse.
+days before it become your start. It scores how you work, not how much: a
+busy week does not look worse.
 
 ```
-RECORD #3  Nov 26 → Dec 2  ▕██████████████░░░░░░▏ day 5/7 · ends Dec 3
-3 of 5 habits better than baseline · ~$19/week saved at your new rates
+RECORD #3  Nov 26 → Dec 2  ▕██████████████░░░░░░▏ day 5 of 7
 
-HABITS                 baseline    prev     now    vs prev     aim
-$ per MTok new work         $61     $48     $41     −15% ✔   < $33
-avoidable $                 34%     22%     18%     −4pt ✔   < 10%
-cache reads                 82%     88%     91%     +3pt ✔   ≥ 90%
-re-sending                  31%     24%     27%     +3pt ✖   < 10%
-re-reading                  58%     51%     50%     −1pt ≈   < 54%
+HOW YOU'RE DOING  ●●●●○  4 of 5 habits on target
+  new work costs 27% less than at your start · ~$19/week saved
 
-FOCUS  R5 Deep context · /compact before 150k
+HABIT                NOW   TARGET   TREND   VS LAST WEEK
+cost of new work     $23    < $33   ██▆▅    ▼ 15% better
+wasted $              8%    < 10%   ▄▃▂▁    ▼ 4pt better
+cache hits           91%    ≥ 90%   ▇▇██    ▲ 3pt better
+cache rebuilds       17%    < 10%   ▃▂▁▂    ▲ 3pt worse
+history re-reads     42%    < 54%   ▅▅▄▄    ≈ same
+
+FIX NEXT
+  ✖ cache rebuilds 17%    → no long breaks mid-task · ~$6/week
+      share of $ paid to send context again after a break or a model switch
+
+FOCUS THIS WEEK  no long breaks mid-task (R11 Context sent again and again)
+  cache rebuilds 24% → 17% now  ✔ better, keep going
 ```
 
-Each week gets one focus (your costliest habit) and shows if it went down.
-`--all` lists every week, `--days 14` changes the length.
+Each week gets one focus (your costliest habit), and the advisor follows your
+trend: a habit that got worse than last week moves to the top of `insights`
+and of the statusline tip (`▲ up on last week`). `--all` lists every week,
+`--days 14` changes the length.
 
 ## What `insights` checks
 
@@ -118,8 +127,8 @@ measured the $ per 1%.
 cc-spend init         # first-run setup
 cc-spend statusline   # install or update the statusline
 cc-spend insights     # what to change to spend less, with $ and the fix
-cc-spend record       # your habits week by week against your baseline (--all, --days N)
-cc-spend report       # $ by model, project, subagent, … (week by default; --chart, --session <id>)
+cc-spend record       # how you're doing: habits vs target, last week and your start (--all, --days N)
+cc-spend report       # where the $ went: trend, $ per day, bars by model, project, … (--by, --session <id>)
 cc-spend live         # live view of every open session (Tab: details, q: quit)
 cc-spend calendar     # work days, daily max, history (Team/Enterprise)
 cc-spend settings     # choose and order the statusline parts

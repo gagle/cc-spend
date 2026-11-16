@@ -89,7 +89,8 @@ export function nextAction(
   const coach = state.coach;
   if (coach) {
     const usd = coach.usd === null ? "" : ` · ~${money(coach.usd)}/${coach.window}`;
-    return { kind: "habit", text: `${coach.action ?? coach.title}${usd}` };
+    const rising = coach.rising === true ? " · ▲ up on last week" : "";
+    return { kind: "habit", text: `${coach.action ?? coach.title}${usd}${rising}` };
   }
   return null;
 }

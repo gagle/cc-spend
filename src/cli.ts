@@ -13,16 +13,17 @@ Operations:
   settings          Arrange the statusline: which parts show, in what order, on how many lines
   uninstall         Remove the managed statusline and restore your previous settings.json statusLine
   doctor            Check Node, Claude Code, the statusline, hooks and every account's files
-  report [period]   API-equivalent $ from your local transcripts. period: today | week | month | 30d |
-                    YYYY-MM (default week). --by model|project|component|subagent|session|day,
-                    --chart (a stacked $ bar per row), --json, --account <key|unattributed>,
-                    --session <id> (one session's $ over time, events and where it went)
+  report [period]   Where the $ went: total and trend, $ per day, what it paid for, a bar per row.
+                    period: today | week | month | 30d | YYYY-MM (default week).
+                    --by model|project|component|subagent|session|day, --json,
+                    --account <key|unattributed>, --session <id> (one session's $ over time)
   insights          What to change to spend less, with $, why and the exact fix. --week (default) |
                     --month, --json, --rules (every rule explained), --snooze <rule> <N>d (0d clears)
   live              Real-time meters of every active session: $ by component, model and subagent, cache,
                     context, limits or budget. --once prints one frame
-  record            Your habits week by week against a baseline: is each one better or worse? Records
-                    start and end by themselves. --all (every record), --days <N> (next length), --json
+  record            How you're doing: each habit against its target, last week and your start, and
+                    what to fix next. Weeks start and end by themselves. --all (every week),
+                    --days <N> (next length), --json
 
 Flags:
   -h, --help        Print this help and exit
@@ -239,12 +240,8 @@ async function runReportOperation(argv: ReadonlyArray<string>): Promise<number> 
   if (key !== "unattributed") await writeFeed(key, now);
   const perPercent =
     key === "unattributed" ? null : limits.usdPerPercentWeek(config.loadLimitSamples(key), now);
-  const built = report.buildReport(key, range, args.by, perPercent);
-  console.log(
-    args.json
-      ? JSON.stringify(built, null, 2)
-      : report.formatReport(built, { chart: args.chart, color }),
-  );
+  const built = report.buildReport(key, range, args.by, perPercent, now);
+  console.log(args.json ? JSON.stringify(built, null, 2) : report.formatReport(built, { color }));
   return 0;
 }
 
@@ -282,7 +279,15 @@ async function runInsightsOperation(argv: ReadonlyArray<string>): Promise<number
     },
     now,
   );
-  const advice = insights.adviceFor(key, args.window, feed, cfg, usage, now);
+  const [{ loadRecords }, { trendName, trendReference, withTrends }] = await Promise.all([
+    import("./record-store.js"),
+    import("./record.js"),
+  ]);
+  const records = loadRecords(key);
+  const advice = withTrends(
+    insights.adviceFor(key, args.window, feed, cfg, usage, now),
+    trendReference(records),
+  );
   if (args.rules) {
     console.log(
       args.json
@@ -292,7 +297,14 @@ async function runInsightsOperation(argv: ReadonlyArray<string>): Promise<number
     return 0;
   }
   console.log(
-    args.json ? JSON.stringify(advice, null, 2) : insights.formatInsights(advice, args.window),
+    args.json
+      ? JSON.stringify(advice, null, 2)
+      : insights.formatInsights(
+          advice,
+          args.window,
+          process.stdout.isTTY && process.env.NO_COLOR === undefined,
+          trendName(records),
+        ),
   );
   return 0;
 }

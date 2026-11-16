@@ -75,12 +75,14 @@ export function requestApiRefresh(accountKey: string, now: Date): boolean {
 
 /** Rebuilds feed.json from the account's files (the /cost-tracker mod reads it). Lazy: never on render. */
 export async function writeFeed(accountKey: string, now: Date): Promise<void> {
-  const [{ buildFeed }, { hasUnpricedTurns }, { adviceFor }, { recordFeed }] = await Promise.all([
-    import("./feed.js"),
-    import("./report.js"),
-    import("./insights.js"),
-    import("./record-store.js"),
-  ]);
+  const [{ buildFeed }, { hasUnpricedTurns }, { adviceFor }, { loadRecords, recordFeed }, record] =
+    await Promise.all([
+      import("./feed.js"),
+      import("./report.js"),
+      import("./insights.js"),
+      import("./record-store.js"),
+      import("./record.js"),
+    ]);
   const config = loadConfig(accountKey);
   const usage = loadUsage(accountKey, now);
   const feed = buildFeed(
@@ -97,7 +99,10 @@ export async function writeFeed(accountKey: string, now: Date): Promise<void> {
   );
   saveFeed(accountKey, {
     ...feed,
-    advice: adviceFor(accountKey, "week", feed, config, usage, now),
+    advice: record.withTrends(
+      adviceFor(accountKey, "week", feed, config, usage, now),
+      record.trendReference(loadRecords(accountKey)),
+    ),
     record: recordFeed(accountKey),
   });
 }

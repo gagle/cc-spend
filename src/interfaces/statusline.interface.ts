@@ -93,6 +93,7 @@ export interface StatuslineState {
     readonly action?: string | null; // the rule's short action; null in feeds written before it existed
     readonly usd: number | null;
     readonly window: string;
+    readonly rising?: boolean; // its $/week grew since the last record
   } | null;
   readonly hasSpendCap: boolean;
   readonly planType: string | null;

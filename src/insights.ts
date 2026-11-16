@@ -95,36 +95,88 @@ export function adviceFor(
   });
 }
 
-const money = (usd: number): string => `~$${usd.toFixed(2)}`;
+const money = (usd: number): string => (usd >= 10 ? `~$${usd.toFixed(0)}` : `~$${usd.toFixed(2)}`);
 
 /** ` (≈3% of 7d/week)`: Pro/Max only, and only once there is a measured $ per 1%. */
 const weekShare = (finding: Finding): string =>
   finding.weekPct === undefined
     ? ""
-    : ` (≈${finding.weekPct < 1 ? "<1" : String(Math.round(finding.weekPct))}% of 7d/week)`;
+    : ` ≈${finding.weekPct < 1 ? "<1" : String(Math.round(finding.weekPct))}% of 7d limit`;
 
-export function formatInsights(advice: ReadonlyArray<Finding>, window: CoachWindow): string {
-  if (advice.length === 0) return `Nothing to change this ${window}.`;
-  const lines = advice.map((finding) => {
+const GREEN = "1;38;2;80;220;120";
+const RED = "1;38;2;248;105;107";
+const BOLD = "1";
+const DIM = "2";
+const BAR_RGB = "240;180;80";
+/** A finding's $/week must move this much since the last record to show an arrow (record.ts MIN_MOVE_USD). */
+const MIN_TREND_USD = 0.5;
+const BAR_CELLS = 16;
+
+/** `▲ +$28 vs last week` (red) / `▼ −$9 vs last week` (green); empty when it barely moved or is unknown. */
+function trendText(
+  finding: Finding,
+  against: string,
+  paint: (code: string, text: string) => string,
+): string {
+  const delta = finding.trendUsdPerWeek;
+  if (delta == null || Math.abs(delta) < MIN_TREND_USD) return "";
+  const amount = money(Math.abs(delta)).replace("~", "");
+  return delta > 0
+    ? paint(RED, `▲ +${amount} vs ${against}`)
+    : paint(GREEN, `▼ −${amount} vs ${against}`);
+}
+
+/** The findings, biggest first: what to change, the $ it costs, its trend, the fix, then the evidence. */
+export function formatInsights(
+  advice: ReadonlyArray<Finding>,
+  window: CoachWindow,
+  color = false,
+  against = "last week",
+): string {
+  if (advice.length === 0) return `Nothing to change this ${window}: every habit is on target.`;
+  const paint = (code: string, text: string): string =>
+    color ? `\x1b[${code}m${text}\x1b[0m` : text;
+  const open = advice.filter((finding) => finding.snoozedUntil === null);
+  const total = open.reduce((sum, finding) => sum + (finding.usd ?? 0), 0);
+  const largest = Math.max(0, ...advice.map((finding) => finding.usd ?? 0));
+  const width = Math.max(...advice.map((finding) => finding.title.length));
+  const head =
+    total > 0
+      ? `${paint(BOLD, "YOU COULD SAVE")} ${paint(GREEN, `${money(total)}/${window}`)}  ${paint(DIM, `${String(open.length)} finding${open.length === 1 ? "" : "s"} · last ${window === "week" ? "7" : "30"} days`)}`
+      : paint(BOLD, "WHAT TO CHANGE");
+  const blocks = advice.map((finding, index) => {
     const fix =
       finding.fix.key === undefined
         ? (finding.fix.value ?? finding.fix.text)
         : `${finding.fix.key}=${finding.fix.value ?? ""}`;
     const snoozed = finding.snoozedUntil
-      ? ` (snoozed until ${finding.snoozedUntil.slice(0, 10)})`
+      ? paint(DIM, `  snoozed until ${finding.snoozedUntil.slice(0, 10)}`)
       : "";
+    const cells =
+      finding.usd === null || largest <= 0
+        ? 0
+        : Math.max(1, Math.round((finding.usd / largest) * BAR_CELLS));
+    const amount =
+      finding.usd === null
+        ? paint(RED, "costs time, not $")
+        : `${money(finding.usd)}/${window}${paint(DIM, weekShare(finding))}`;
+    const trend = trendText(finding, against, paint);
     return [
-      `${finding.id}  ${finding.title}${finding.usd === null ? "" : `  ${money(finding.usd)}/${window}`}${weekShare(finding)}${snoozed}`,
-      `    ${finding.evidence}`,
-      ...(finding.why === undefined ? [] : [`    why: ${finding.why}`]),
-      `    fix: ${finding.fix.text}${fix === finding.fix.text ? "" : ` → ${fix}`}`,
+      `${String(index + 1).padStart(2)}  ${paint(BOLD, finding.title.padEnd(width))}  ${paint(`38;2;${BAR_RGB}`, "█".repeat(cells))}${" ".repeat(BAR_CELLS - cells)}  ${amount}${trend ? `  ${trend}` : ""}${snoozed}`,
+      `    → ${finding.fix.text}${finding.fix.text.includes(fix) ? "" : paint(DIM, `  (${fix})`)}`,
+      paint(DIM, `    ${finding.evidence.replaceAll(`${homedir()}/`, "~/")}`),
+      ...(finding.why === undefined ? [] : [paint(DIM, `    why: ${finding.why}`)]),
     ].join("\n");
   });
   return [
-    lines.join("\n\n"),
+    head,
     "",
-    "API-equivalent estimates. Every rule explained: cc-spend insights --rules",
-    "Snooze one: cc-spend insights --snooze R1 7d",
+    blocks.join("\n\n"),
+    "",
+    paint(
+      DIM,
+      "API-equivalent estimates · every rule: cc-spend insights --rules · hide one: --snooze R1 7d",
+    ),
   ].join("\n");
 }
 

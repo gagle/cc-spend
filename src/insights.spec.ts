@@ -66,43 +66,74 @@ describe("parseInsightsArgs", () => {
 });
 
 describe("formatInsights", () => {
-  it("one block per finding with the fix; snoozed marked; empty says so", async () => {
+  it("a total to save, one block per finding with its bar, $, trend and fix; snoozed marked; empty says so", async () => {
     const { formatInsights } = await fresh();
-    expect(formatInsights([], "week")).toBe("Nothing to change this week.");
-    const text = formatInsights(
-      [
-        { ...FINDING, why: "Fast mode bills every token at 2x." },
-        {
-          ...FINDING,
-          id: "R8",
-          usd: null,
-          fix: { kind: "habit", text: "Slow down" },
-          snoozedUntil: "2026-10-14T00:00:00.000Z",
-        },
-        { ...FINDING, id: "R9", fix: { kind: "command", value: "/model", text: "Switch" } },
-      ],
-      "week",
+    expect(formatInsights([], "week")).toBe(
+      "Nothing to change this week: every habit is on target.",
     );
-    expect(text).toContain("R2  Fast mode  ~$4.00/week");
-    expect(text).toContain("fix: Turn fast mode off (/fast) → fastMode=false");
-    expect(text).toContain("    why: Fast mode bills every token at 2x.\n");
-    expect(text).toContain("\n\nR8  Fast mode (snoozed until 2026-10-14)\n"); // no $: no amount; blocks spaced
-    expect(text).toContain("fix: Slow down\n");
-    expect(text).toContain("fix: Switch → /model");
-    expect(text).toContain("API-equivalent estimates");
-    expect(text).toContain("Every rule explained: cc-spend insights --rules");
-    expect(
-      formatInsights([{ ...FINDING, fix: { kind: "env", key: "K", text: "t" } }], "week"),
-    ).toContain("→ K=");
+    const findings: ReadonlyArray<Finding> = [
+      { ...FINDING, why: "Fast mode bills every token at 2x.", trendUsdPerWeek: 3 },
+      {
+        ...FINDING,
+        id: "R8",
+        title: "Running out early",
+        usd: null,
+        fix: { kind: "habit", text: "Slow down" },
+        snoozedUntil: "2026-10-14T00:00:00.000Z",
+      },
+      {
+        ...FINDING,
+        id: "R9",
+        title: "Older model",
+        usd: 12,
+        evidence: `${fakeHome}/x/CLAUDE.md`,
+        fix: { kind: "command", value: "/model", text: "Switch with /model" },
+        trendUsdPerWeek: -2,
+      },
+      {
+        ...FINDING,
+        id: "R1",
+        usd: 1,
+        fix: { kind: "env", key: "K", text: "t" },
+        trendUsdPerWeek: 0.1,
+      },
+    ];
+    expect(formatInsights(findings, "week", false, "your start")).toMatchInlineSnapshot(`
+      "YOU COULD SAVE ~$17/week  3 findings · last 7 days
+
+       1  Fast mode          █████             ~$4.00/week  ▲ +$3.00 vs your start
+          → Turn fast mode off (/fast)  (fastMode=false)
+          1 fast turns
+          why: Fast mode bills every token at 2x.
+
+       2  Running out early                    costs time, not $  snoozed until 2026-10-14
+          → Slow down
+          1 fast turns
+
+       3  Older model        ████████████████  ~$12/week  ▼ −$2.00 vs your start
+          → Switch with /model
+          ~/x/CLAUDE.md
+
+       4  Fast mode          █                 ~$1.00/week
+          → t  (K=)
+          1 fast turns
+
+      API-equivalent estimates · every rule: cc-spend insights --rules · hide one: --snooze R1 7d"
+    `);
+    const colored = formatInsights(findings, "week", true);
+    expect(colored).toContain("\x1b[1;38;2;248;105;107m▲ +$3.00 vs last week\x1b[0m");
+    expect(colored).toContain("\x1b[1;38;2;80;220;120m▼ −$2.00 vs last week\x1b[0m");
+    expect(formatInsights([{ ...FINDING, usd: null }], "month")).toContain("WHAT TO CHANGE");
+    expect(formatInsights([FINDING], "month")).toContain("1 finding · last 30 days");
   });
 
   it("Pro/Max: the $ as points of the 7d limit, `<1` under one point", async () => {
     const { formatInsights } = await fresh();
     expect(formatInsights([{ ...FINDING, weekPct: 2.6 }], "week")).toContain(
-      "R2  Fast mode  ~$4.00/week (≈3% of 7d/week)\n",
+      "~$4.00/week ≈3% of 7d limit",
     );
     expect(formatInsights([{ ...FINDING, weekPct: 0.4 }], "week")).toContain(
-      "~$4.00/week (≈<1% of 7d/week)\n",
+      "~$4.00/week ≈<1% of 7d limit",
     );
   });
 });
