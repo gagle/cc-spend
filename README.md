@@ -12,6 +12,12 @@ if it worked.
 npm install -g @gllamas/cc-spend && cc-spend init
 ```
 
+Needs Node 24+. Install it globally (`npx` is refused: Claude Code must point
+at files that stay). `init` sets up the statusline; on Team/Enterprise it also
+asks for your work days and cap. After that there is nothing to do: cc-spend
+reads what Claude Code already writes. Each Claude account is tracked on its
+own, under `~/.config/cc-spend/`.
+
 Zero runtime dependencies. No server, no analytics, no message text stored.
 
 ## Pro / Max: your real limits, before you hit them
@@ -117,19 +123,6 @@ cc-spend doctor       # check Node, Claude Code, the statusline, hooks, files
 cc-spend uninstall    # remove it and restore your old statusline
 ```
 
-## Install
-
-```sh
-npm install -g @gllamas/cc-spend
-cc-spend init
-```
-
-Needs Node 24+. Install it globally (`npx` is refused: Claude Code must point
-at files that stay). `init` sets up the statusline; on Team/Enterprise it also
-asks for your work days and cap. After that there is nothing to do: cc-spend
-reads what Claude Code already writes. Each Claude account is tracked on its
-own, under `~/.config/cc-spend/`.
-
 ## Privacy
 
 No server, no analytics. The only network calls go to Anthropic's read-only
@@ -142,11 +135,3 @@ branch, session id and name, times, hook runs, MCP server names, and per day
 how many prompts, `/clear`, `/compact` and `/model` you used. It reads the
 size of your CLAUDE.md and MEMORY.md files. **No message text is stored, and
 nothing is sent anywhere.**
-
-## Development
-
-```sh
-pnpm install && pnpm build && pnpm test
-```
-
-The screenshots above come from the real renderers with made-up data.
