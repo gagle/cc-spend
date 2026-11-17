@@ -88,6 +88,8 @@ evidence, why it costs and the fix. `--rules` prints this list in the
 terminal and marks the rules found now. Findings under $0.50 are hidden;
 `--snooze R1 7d` hides one for a week.
 
+![cc-spend insights: what you could save per week, each finding with its bar, trend vs last week, fix, evidence and why](https://raw.githubusercontent.com/gagle/cc-spend/main/media/insights.png)
+
 | ID  | Finding                      | Why it costs                                                                                                  | Fix                                                                                                              |
 | --- | ---------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | R1  | Subagents on a premium model | Subagents mostly search and read; a premium model bills the same tokens at 2-5x Sonnet.                       | CLAUDE_CODE_SUBAGENT_MODEL=sonnet, or model: in the agent file.                                                  |
