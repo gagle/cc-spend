@@ -68,26 +68,7 @@ grid, one grid row per statusline line, and watch the preview change.
 days before it become your start. It scores how you work, not how much: a
 busy week does not look worse.
 
-```
-RECORD #3  Nov 26 → Dec 2  ▕██████████████░░░░░░▏ day 5 of 7
-
-HOW YOU'RE DOING  ●●●●○  4 of 5 habits on target
-  new work costs 27% less than at your start · ~$19/week saved
-
-HABIT                NOW   TARGET   TREND   VS LAST WEEK
-cost of new work     $23    < $33   ██▆▅    ▼ 15% better
-wasted $              8%    < 10%   ▄▃▂▁    ▼ 4pt better
-cache hits           91%    ≥ 90%   ▇▇██    ▲ 3pt better
-cache rebuilds       17%    < 10%   ▃▂▁▂    ▲ 3pt worse
-history re-reads     42%    < 54%   ▅▅▄▄    ≈ same
-
-FIX NEXT
-  ✖ cache rebuilds 17%    → no long breaks mid-task · ~$6/week
-      share of $ paid to send context again after a break or a model switch
-
-FOCUS THIS WEEK  no long breaks mid-task (R11 Context sent again and again)
-  cache rebuilds 24% → 17% now  ✔ better, keep going
-```
+![cc-spend record: habits on target, trend vs last week, what to fix next, this week's focus](https://raw.githubusercontent.com/gagle/cc-spend/main/media/record.png)
 
 Each week gets one focus (your costliest habit), and the advisor follows your
 trend: a habit that got worse than last week moves to the top of `insights`
