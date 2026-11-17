@@ -11,7 +11,7 @@ or test it.
 ## Verification commands
 
 ```
-pnpm lint && pnpm typecheck && pnpm format:check && pnpm docs:check && pnpm test && pnpm build && pnpm run test:e2e
+pnpm lint && pnpm typecheck && pnpm format:check && pnpm docs:check && pnpm shots:check && pnpm test && pnpm build && pnpm run test:e2e
 ```
 
 `test:e2e` runs the built binary, so it comes after `build`. While iterating:
@@ -39,10 +39,29 @@ source area is documented. `pnpm docs:drift` lists docs whose sources changed
 in the current diff; the Stop hook `.claude/hooks/doc-drift-check.sh` runs it
 once per session.
 
+## README screenshots
+
+The images in `media/` come from the real renderers with made-up data:
+`scripts/shots.mjs` holds the list (`SHOTS`: name → fixture in
+`scripts/shots/`, window title) and nowhere else. Fixtures fix the clock; the
+runner gives each one `TZ=UTC` and a throwaway HOME. `media/shots.json` holds
+the sha256 of each shot's ANSI text (not the PNG: Chrome builds differ).
+
+- `pnpm shots:check`: build, re-render the text, name every image whose
+  output changed. In the CI `lint` job; the Stop hook
+  `.claude/hooks/shots-check.sh` runs it once per session when `src/` or the
+  fixtures changed.
+- `pnpm shots [name…]`: build, screenshot with headless Chrome (macOS; `CHROME`
+  overrides the path) into `media/<name>.png`, update the hash. Look at the
+  image before committing it.
+
+A new image adds its fixture and `SHOTS` entry, then `pnpm shots <name>`.
+
 ## CI
 
 `.github/workflows/ci.yml` runs the same checks: `lint` (lint, typecheck,
-format, docs), `build`, `test` (unit, 100% coverage), `e2e` (build, then the
-built binary on Linux, macOS and Windows, each on Node 24 (the `engines`
-floor) and 26); the other jobs use `.nvmrc`. `coverage` comments on PRs. The
-build script is cross-platform (no `rm -rf`).
+format, docs, screenshots), `build`, `test` (unit, 100% coverage), `e2e`
+(build, then the built binary on Linux, macOS and Windows, each on Node 24
+(the `engines` floor) and 26); the other jobs use `.nvmrc`. `e2e` skips when
+every changed file is Markdown or under `media/` (the `changes` job).
+`coverage` comments on PRs. The build script is cross-platform (no `rm -rf`).

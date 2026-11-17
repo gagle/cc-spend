@@ -38,7 +38,9 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "docs:check": "node scripts/doc-drift.mjs check",
-    "docs:drift": "node scripts/doc-drift.mjs drift"
+    "docs:drift": "node scripts/doc-drift.mjs drift",
+    "shots": "pnpm run build && node scripts/shots.mjs render",
+    "shots:check": "pnpm run build && node scripts/shots.mjs check"
   },
   "engines": {
     "node": ">=24"

@@ -326,6 +326,14 @@ payload() { printf '%s' "$1" | HOME=$SANDBOX node /path/to/cc-spend/bin/cc-spend
 | R11 | a finding whose $ grew since the last record (or the start)             | `ccs insights` shows `▲ +$… vs last week` (red) and ranks it above a larger, steady one; the statusline tip ends `· ▲ up on last week`                                                                                                                                                                                   | `src/record.spec.ts`, `src/insights.spec.ts`, `src/next-action.spec.ts`, `src/statusline.spec.ts` |
 | R12 | `ccs record` with the focus on R11 (or R4, R10)                         | the focus line names the habit (`cache rebuilds 28% → 17% now`), the same values as the habits table                                                                                                                                                                                                                     | `src/record.spec.ts`                                                                              |
 
+## S. README screenshots (2026-11-17)
+
+| ID  | Steps                                                         | Expected                                                                                                                      | Auto                                 |
+| --- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| S1  | change a string a README screenshot shows; `pnpm shots:check` | `✖ media/<name>.png is stale`, exit 1; the Stop hook says the same once per session                                           | CI `lint` job                        |
+| S2  | `pnpm shots <name>` on macOS with Chrome                      | `media/<name>.png` shows the new output in the same window style; `media/shots.json` updated; `pnpm shots:check` passes again | manual                               |
+| S3  | a PR that changes only Markdown or `media/`                   | CI skips the `e2e` matrix; `lint`, `build`, `test` still run                                                                  | `.github/workflows/ci.yml` `changes` |
+
 ## Consequences
 
 The plan is a release gate. A new feature adds rows here in the same change;

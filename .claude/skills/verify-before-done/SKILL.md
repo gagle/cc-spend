@@ -14,8 +14,10 @@ decision tree.
    `pnpm vitest run src/<file>.spec.ts`.
 2. Before calling ANY change done, run:
    ```
-   pnpm lint && pnpm typecheck && pnpm format:check && pnpm docs:check && pnpm test && pnpm build && pnpm run test:e2e
+   pnpm lint && pnpm typecheck && pnpm format:check && pnpm docs:check && pnpm shots:check && pnpm test && pnpm build && pnpm run test:e2e
    ```
+   A stale screenshot from `shots:check` means the terminal output changed:
+   if intended, `pnpm shots <name>` and look at the new image.
 3. After that build (and after any earlier build during the change), always
    refresh the machine install:
    ```

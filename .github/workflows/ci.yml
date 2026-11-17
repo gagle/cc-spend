@@ -21,6 +21,27 @@ jobs:
       - run: pnpm run typecheck
       - run: pnpm run format:check
       - run: pnpm run docs:check
+      - run: pnpm run shots:check
+
+  # code=false when every changed file is Markdown or under media/: the e2e matrix then skips.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if files=$(git diff --name-only "$BASE" "$GITHUB_SHA" 2>/dev/null) && [ -n "$files" ] \
+            && ! printf '%s\n' "$files" | grep -qvE '(\.md$|^media/)'; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     runs-on: ubuntu-latest
@@ -52,6 +73,8 @@ jobs:
 
   e2e:
     # The built binary on every platform the shim must run on (file:// imports, paths, raw-mode TTY).
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:

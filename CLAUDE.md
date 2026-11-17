@@ -21,6 +21,7 @@ See `.claude/references/index.md` for pointers into `docs/` — load only the fi
 - `pnpm docs:drift` lists docs whose sources changed in the diff; the Stop hook runs it once per session. Correct what is now false in the same change; if behaviour did not change, say so and stop.
 - Never cite a line number; never state a number the code owns (test counts, file counts).
 - A user-facing change adds or updates its row in the manual test plan.
+- README images in `media/` are rendered from fixtures; the list lives in `scripts/shots.mjs` (`SHOTS`). `pnpm shots:check` (CI gate, Stop hook) names the images whose terminal output changed; `pnpm shots <name>` re-takes one.
 
 ## Performance rules
 
