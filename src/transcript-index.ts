@@ -406,7 +406,7 @@ function applyDelta(owner: string, delta: OwnerDelta): void {
 
 /** Every owner with an index directory: the accounts' and the shared unattributed one. */
 function indexOwners(): ReadonlyArray<string> {
-  let keys: ReadonlyArray<string> = [];
+  let keys: ReadonlyArray<string>;
   try {
     keys = readdirSync(ACCOUNTS_DIR).filter((key) => existsSync(ownerIndexDir(key)));
   } catch {
