@@ -92,6 +92,8 @@ const DOC_MAP = {
     "e2e/**",
   ],
   "docs/testing-and-verification.md": [
+    "scripts/shots.mjs",
+    "scripts/shots/**",
     "vitest.config.ts",
     "vitest.e2e.config.ts",
     ".github/workflows/**",
