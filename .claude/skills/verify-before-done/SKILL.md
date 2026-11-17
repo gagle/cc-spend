@@ -34,5 +34,6 @@ decision tree.
    the existing inline convention for genuinely untestable branches (see
    existing use sites in `src/*.ts`).
 6. Step 2's sequence is what `.github/workflows/ci.yml` runs (parallel jobs;
-   e2e builds first, on Linux/macOS/Windows) — passing it locally means CI passes too, not an
-   approximation. Step 3 is local-machine only (not CI).
+   e2e builds first, on Linux/macOS/Windows × Node 24 and 26) — passing it locally means CI
+   passes too, not an approximation. Other jobs use `.nvmrc`; check a runtime change on the
+   Node 24 floor too (`nvm use 24`). Step 3 is local-machine only (not CI).

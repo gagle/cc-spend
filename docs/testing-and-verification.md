@@ -43,5 +43,6 @@ once per session.
 
 `.github/workflows/ci.yml` runs the same checks: `lint` (lint, typecheck,
 format, docs), `build`, `test` (unit, 100% coverage), `e2e` (build, then the
-built binary on Linux, macOS and Windows); `coverage` comments on PRs. The
+built binary on Linux, macOS and Windows, each on Node 24 (the `engines`
+floor) and 26); the other jobs use `.nvmrc`. `coverage` comments on PRs. The
 build script is cross-platform (no `rm -rf`).

@@ -66,10 +66,10 @@ README when `src/rules.ts` changes.
   the open findings), then each finding (a blank line between them): its title,
   a bar scaled to the largest $, the $ (and the share of the 7d limit on
   Pro/Max), its trend against last week or the start (`▲ +$13 vs last week`red,`▼`green, hidden under $0.50), then`→`the fix (the setting or command
-dimmed after it unless the text already names it), the evidence (home paths
-as`~/`) and `why`, dimmed. A finding with no $ (R8) says "costs time, not
-$". `--rules`prints every rule (checks, why, $, fix) and
-marks with`●`the ones found now;`--rules --json`gives the catalog with`found`. `--snooze R1 0d`clears a snooze. Snoozes live in`config.json` `snoozed` (rule → ISO end).
+  dimmed after it unless the text already names it), the evidence (home paths
+  as`~/`) and `why`, dimmed. A finding with no $ (R8) says "costs time, not
+  $". `--rules`prints every rule (checks, why, $, fix) and
+  marks with`●`the ones found now;`--rules --json`gives the catalog with`found`. `--snooze R1 0d`clears a snooze. Snoozes live in`config.json` `snoozed` (rule → ISO end).
 - Statusline part 14 `coach` ("Next action", `src/next-action.ts`): one short
   action, the most urgent first, from what the render already has (one small
   `feed.json` read, no transcripts):
